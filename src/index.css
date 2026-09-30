@@ -1,0 +1,126 @@
+@import "tailwindcss";
+
+/*
+ * Household design tokens (Tailwind v4, CSS-first).
+ * Contrast (WCAG AA): ink / ink-muted / ink-subtle pass 4.5:1 on surface, canvas and sunken;
+ * white passes 4.5:1 on brand, success, danger and every avatar colour;
+ * warning passes 4.5:1 as text on surface; control passes 3:1 as a UI border.
+ */
+@theme {
+  /* Surfaces & text */
+  --color-canvas: #faf7f2;
+  --color-surface: #ffffff;
+  --color-sunken: #f3eee6;
+  --color-ink: #1f2a27;
+  --color-ink-muted: #4f5a56;
+  --color-ink-subtle: #626b67;
+  --color-line: #e6dfd4;
+  --color-line-strong: #cfc6b8;
+  --color-control: #858c88;
+
+  /* Brand & semantic */
+  --color-brand: #2f6f5e;
+  --color-brand-hover: #275d4f;
+  --color-brand-soft: #e3efe9;
+  --color-brand-strong: #1f4d41;
+  --color-brand-ink: #ffffff;
+  --color-success: #2e7d4f;
+  --color-success-soft: #e4f3ea;
+  --color-warning: #8f5b00;
+  --color-warning-soft: #fdf1dc;
+  --color-danger: #b42318;
+  --color-danger-soft: #fdecea;
+
+  /* Task priority */
+  --color-priority-low: #5b6b7a;
+  --color-priority-medium: #b7791f;
+  --color-priority-high: #c2410c;
+
+  /* Event categories */
+  --color-cat-social: #c2410c;
+  --color-cat-appointment: #2563eb;
+  --color-cat-travel: #0f766e;
+  --color-cat-home: #2f6f5e;
+  --color-cat-reminder: #a16207;
+  --color-cat-other: #6b7280;
+
+  /* Shopping categories */
+  --color-cat-groceries: #3f7d3a;
+  --color-cat-household: #2563eb;
+  --color-cat-pharmacy: #be185d;
+  --color-cat-shopping-other: #6b7280;
+
+  /* Member avatars (white initials on top) */
+  --color-avatar-1: #2f6f5e;
+  --color-avatar-2: #b45309;
+  --color-avatar-3: #1d4ed8;
+  --color-avatar-4: #be185d;
+  --color-avatar-5: #6d28d9;
+  --color-avatar-6: #0f766e;
+  --color-avatar-7: #b91c1c;
+  --color-avatar-8: #4d5b6a;
+
+  /* Typography: system stack, no web font download */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+
+  /* Radii */
+  --radius-control: 0.625rem;
+  --radius-card: 1rem;
+  --radius-sheet: 1.5rem;
+  --radius-pill: 9999px;
+
+  /* Shadows */
+  --shadow-card: 0 1px 2px rgb(31 42 39 / 0.06), 0 1px 3px rgb(31 42 39 / 0.08);
+  --shadow-raised: 0 4px 12px rgb(31 42 39 / 0.1), 0 2px 4px rgb(31 42 39 / 0.06);
+  --shadow-sheet: 0 -8px 24px rgb(31 42 39 / 0.12);
+
+  /* Motion */
+  --default-transition-duration: 180ms;
+  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-canvas font-sans text-ink antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      scroll-behavior: auto !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+@layer components {
+  .card {
+    @apply rounded-card border border-line bg-surface p-6 shadow-card;
+  }
+
+  .btn {
+    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-control px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .btn-primary {
+    @apply bg-brand text-brand-ink hover:bg-brand-hover;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-pill bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong;
+  }
+}
