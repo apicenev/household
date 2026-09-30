@@ -13,10 +13,11 @@ logs
 *.log
 npm-debug.log*
 
-# Firebase
-.firebase/
-*-debug.log
+# Firebase emulator exports (debug logs are covered by *.log)
 emulator-data/
+
+# Vercel CLI project link (only created if you run `vercel` locally)
+.vercel
 
 # Local-only docs & assistant instructions
 docs/
