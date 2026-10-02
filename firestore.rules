@@ -9,7 +9,9 @@ rules_version = '2';
 // Structure:
 //   users/{uid}                        own profile only                       (Phase 1)
 //   households/{hid}                   members read, owner updates            (Phase 2)
-//   households/{hid}/members|tasks|shoppingItems|itemStats|events             (Phases 2–7)
+//   households/{hid}/members           members read, own doc only             (Phase 2)
+//   households/{hid}/tasks             members CRUD, validated                (Phase 3)
+//   households/{hid}/shoppingItems|itemStats|events                           (Phases 5–7)
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
@@ -270,28 +272,151 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // tasks/{taskId} (Phase 3): every member reads and writes every task (requirements §3).
+      // A write either edits fields, completes (open → done) or reopens (done → open).
+      match /tasks/{taskId} {
+        function validTitle(value) {
+          return value is string && value.size() <= 200 && value.trim().size() >= 1;
+        }
+
+        function validNotes(value) {
+          return value is string && value.size() >= 1 && value.size() <= 2000;
+        }
+
+        function validPriority(value) {
+          return value in ['low', 'medium', 'high'];
+        }
+
+        // A calendar date «2026-10-03» (NFR-09) or null. Checks months 01–12 and days 01–31
+        // only, so «2026-02-31» passes; harmless, the client only writes real dates.
+        function validDueDate(value) {
+          return value == null
+            || (value is string
+              && value.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$'));
+        }
+
+        function validAssignee(value) {
+          return value == null
+            || (value is string && value in get(householdPath(hid)).data.memberIds);
+        }
+
+        function validNewTask() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['title', 'notes', 'assigneeId', 'dueDate', 'priority',
+                                      'status', 'createdBy', 'createdAt', 'updatedAt'])
+            && data.keys().hasAll(['title', 'assigneeId', 'dueDate', 'priority', 'status',
+                                   'createdBy', 'createdAt', 'updatedAt'])
+            && validTitle(data.title)
+            && (!('notes' in data) || validNotes(data.notes))
+            && validAssignee(data.assigneeId)
+            && validDueDate(data.dueDate)
+            && validPriority(data.priority)
+            && data.status == 'open'
+            && data.createdBy == request.auth.uid
+            && data.createdAt == request.time
+            && data.updatedAt == request.time;
+        }
+
+        // Edit: only the editable fields change; the assignee is checked only when it
+        // changes, so a task of someone who left (Phase 9) stays editable.
+        function isEdit() {
+          let data = request.resource.data;
+          let changed = changedKeys();
+          return changed.hasOnly(['title', 'notes', 'assigneeId', 'dueDate', 'priority',
+                                  'updatedAt'])
+            && data.updatedAt == request.time
+            && (!('title' in changed) || validTitle(data.title))
+            && (!('notes' in changed) || !('notes' in data) || validNotes(data.notes))
+            && (!('assigneeId' in changed) || validAssignee(data.assigneeId))
+            && (!('dueDate' in changed) || validDueDate(data.dueDate))
+            && (!('priority' in changed) || validPriority(data.priority));
+        }
+
+        function isComplete() {
+          let data = request.resource.data;
+          return resource.data.status == 'open'
+            && data.status == 'done'
+            && changedKeys().hasOnly(['status', 'completedAt', 'completedBy', 'updatedAt'])
+            && data.completedAt == request.time
+            && data.completedBy == request.auth.uid
+            && data.updatedAt == request.time;
+        }
+
+        function isReopen() {
+          let data = request.resource.data;
+          return resource.data.status == 'done'
+            && data.status == 'open'
+            && changedKeys().hasOnly(['status', 'completedAt', 'completedBy', 'updatedAt'])
+            && !('completedAt' in data)
+            && !('completedBy' in data)
+            && data.updatedAt == request.time;
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isMember(hid) && validNewTask();
+        allow update: if isMember(hid) && (isEdit() || isComplete() || isReopen());
+        allow delete: if isMember(hid);
+      }
+
       // activity/{id}: append-only (ACT-06).
       match /activity/{activityId} {
+        function taskPath(taskId) {
+          return /databases/$(database)/documents/households/$(hid)/tasks/$(taskId);
+        }
+
+        function nullableString(value) {
+          return value == null || value is string;
+        }
+
+        // task_assigned: old and new assignee with name snapshots («Vorher: Nevio»).
+        function validAssignDetails(details) {
+          return details is map
+            && details.keys().hasOnly(['fromId', 'fromName', 'toId', 'toName'])
+            && details.keys().hasAll(['fromId', 'fromName', 'toId', 'toName'])
+            && nullableString(details.fromId)
+            && nullableString(details.fromName)
+            && nullableString(details.toId)
+            && nullableString(details.toName);
+        }
+
+        // Task entries (Phase 3): written in the same batch as the task, whose title after
+        // the batch is the snapshot; a completion entry needs the task to be done.
+        function validTaskActivity(data) {
+          let task = taskPath(data.targetId);
+          return data.type in ['task_created', 'task_completed', 'task_assigned']
+            && data.targetType == 'task'
+            && isMember(hid)
+            && existsAfter(task)
+            && getAfter(task).data.title == data.targetTitle
+            && (data.type != 'task_completed' || getAfter(task).data.status == 'done')
+            && ((data.type == 'task_assigned' && 'details' in data
+                && validAssignDetails(data.details))
+              || (data.type != 'task_assigned' && !('details' in data)));
+        }
+
+        function validMemberJoined(data) {
+          let uid = request.auth.uid;
+          return data.type == 'member_joined'
+            && (!('details' in data) || data.details is map)
+            && (isMember(hid)
+              // The joiner (not a member before the batch) records their own join.
+              || (data.targetType == 'member'
+                && data.targetId == uid
+                && isMemberAfter(hid)));
+        }
+
         function validNewActivity() {
           let data = request.resource.data;
-          let uid = request.auth.uid;
           return data.keys().hasOnly(['actorId', 'type', 'targetType', 'targetId',
                                       'targetTitle', 'details', 'createdAt'])
             && data.keys().hasAll(['actorId', 'type', 'targetType', 'targetId', 'targetTitle',
                                    'createdAt'])
-            && data.actorId == uid
+            && data.actorId == request.auth.uid
             && data.createdAt == request.time
-            && data.type in ['member_joined']
             && data.targetType is string
             && data.targetId is string
             && data.targetTitle is string
-            && (!('details' in data) || data.details is map)
-            && (isMember(hid)
-              // The joiner (not a member before the batch) records their own join.
-              || (data.type == 'member_joined'
-                && data.targetType == 'member'
-                && data.targetId == uid
-                && isMemberAfter(hid)));
+            && (validMemberJoined(data) || validTaskActivity(data));
         }
 
         allow get, list: if isMember(hid);

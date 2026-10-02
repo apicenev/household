@@ -1,7 +1,7 @@
-/** Kinds of activity entries (ACT-01). Later phases add task, shopping and event types. */
-export type ActivityType = "member_joined";
+/** Kinds of activity entries (ACT-01). Later phases add shopping and event types. */
+export type ActivityType = "member_joined" | "task_created" | "task_completed" | "task_assigned";
 
-export type ActivityTargetType = "member";
+export type ActivityTargetType = "member" | "task";
 
 /** households/{hid}/activity/{id}: append-only (ACT-02, ACT-06). */
 export interface ActivityEntry {

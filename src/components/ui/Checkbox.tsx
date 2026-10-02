@@ -14,10 +14,12 @@ export interface CheckboxProps extends Omit<
   overdue?: boolean;
   /** Spinning ring while a write is pending. */
   syncing?: boolean;
+  /** Visible ring: md 26 px (default), sm 24 px (desktop task rows). Hit area stays 44 px. */
+  size?: "md" | "sm";
 }
 
 /**
- * Round checkbox: 26 px visual in a 44 px hit area. Checking fills the ring in 160 ms and
+ * Round checkbox: 26 px (24 px `sm`) visual in a 44 px hit area. Checking fills the ring in 160 ms and
  * springs the tick in over 360 ms.
  */
 export function Checkbox({
@@ -25,6 +27,7 @@ export function Checkbox({
   onChange,
   overdue = false,
   syncing = false,
+  size = "md",
   disabled,
   className,
   onClick,
@@ -65,8 +68,9 @@ export function Checkbox({
       <span
         aria-hidden="true"
         className={cx(
-          "flex size-6.5 items-center justify-center rounded-pill border-2 transition-[background-color,border-color,transform] duration-(--duration-fast) ease-out",
+          "flex items-center justify-center rounded-pill border-2 transition-[background-color,border-color,transform] duration-(--duration-fast) ease-out",
           "group-focused:outline-2 group-focused:outline-offset-3 group-focused:outline-focus group-focused:outline-solid",
+          size === "sm" ? "size-6" : "size-6.5",
           ring,
         )}
       >

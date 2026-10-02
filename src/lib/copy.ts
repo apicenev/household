@@ -113,3 +113,67 @@ export const householdCopy = {
   copied: "Kopiert",
   newCode: "Neuer Code",
 } as const;
+
+/** Task wording (Phase 3): list, filters, sheet, toasts and derived states D12–D25. */
+export const taskCopy = {
+  groups: {
+    overdue: "Überfällig",
+    today: "Heute",
+    upcoming: "Demnächst",
+    none: "Ohne Datum",
+  },
+  filters: {
+    label: "Filter",
+    mine: "Meine",
+    unassigned: "Nicht zugewiesen",
+    overdue: "Überfällig",
+    today: "Heute",
+    week: "Diese Woche",
+    noDate: "Ohne Datum",
+    highPriority: "Priorität Hoch",
+    reset: "Zurücksetzen",
+  },
+  noResults: "Keine passenden Aufgaben",
+  noResultsText: "Entferne einen Filter.",
+  resetFilters: "Filter zurücksetzen",
+  noneYet: "Noch keine Aufgaben",
+  noneYetText: "Erfasse, was bei euch ansteht.",
+  allDone: "Alles erledigt 🎉",
+  allDoneText: "Nichts mehr offen.",
+  addTask: "Aufgabe hinzufügen",
+  newTask: "Neue Aufgabe",
+  editTask: "Aufgabe bearbeiten",
+  deleteTask: "Aufgabe löschen",
+  loadError: "Aufgaben konnten nicht geladen werden.",
+  done: "Erledigt",
+  details: "Aufgabendetails",
+  noRepeat: "Wiederholt sich nicht",
+  dueOn: "Fällig am",
+  priority: "Priorität",
+  title: "Titel",
+  notes: "Notizen",
+  nobody: "Niemand",
+  titleEmpty: "Gib der Aufgabe einen Namen.",
+  titlePlaceholder: "Was ist zu tun?",
+  moreOptions: "Mehr Optionen",
+  deletedElsewhere: "Diese Aufgabe wurde gelöscht.",
+  completedElsewhere: "Diese Aufgabe wurde erledigt.",
+  /** «Abhaken: Bad putzen» */
+  checkLabel: (title: string) => `${terms.markDone}: ${title}`,
+  /** «Bad putzen wieder öffnen» */
+  reopenLabel: (title: string) => `${title} wieder öffnen`,
+  /** «„Bad putzen“ erledigt» toast (B6). */
+  completedToast: (title: string) => `«${title}» erledigt`,
+  /** Schnellerfassung status line (B13). */
+  addedStatus: (title: string) => `«${title}» zu den Aufgaben hinzugefügt`,
+  /** Delete confirmation title. */
+  deleteTitle: (title: string) => `«${title}» löschen?`,
+  /** D22: «Die Aufgabe verschwindet für Nevio, Anna und Mia.» */
+  deleteText: (names: string[]) =>
+    names.length < 2
+      ? "Die Aufgabe wird gelöscht."
+      : `Die Aufgabe verschwindet für ${new Intl.ListFormat("de-CH", { type: "conjunction" }).format(names)}.`,
+  /** Desktop summary «5 offen · 1 überfällig · 2 heute fällig» (B4). */
+  summary: (open: number, overdue: number, today: number) =>
+    `${open} offen · ${overdue} überfällig · ${today} heute fällig`,
+} as const;

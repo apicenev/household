@@ -9,15 +9,18 @@ import { Button } from "../ui/Button";
 import { AccountMenu } from "./AccountMenu";
 import { BrandTile } from "./BrandMark";
 import { sidebarItems, type NavItem } from "./navigation";
+import { openTaskCount } from "../../domain/tasks";
 
 /**
  * Desktop sidebar (Sidebar.dc.html), 272 px on sunken: brand with the household name, «Neu»,
  * primary and secondary navigation, account footer with the role line («Besitzer · 2
- * Mitglieder»). The counts next to Aufgaben / Einkauf arrive with Phases 3 and 5.
+ * Mitglieder»). The open-task count next to Aufgaben (Phase 3 B10); the Einkauf count
+ * arrives with Phase 5.
  */
 export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; className?: string }) {
   const member = useCurrentMember();
-  const { household, members, isOwner } = useHousehold();
+  const { household, members, isOwner, tasks } = useHousehold();
+  const counts: Partial<Record<NavItem["key"], number>> = { tasks: openTaskCount(tasks) };
   // Without a household (load error, D8) the footer falls back to the email.
   const roleLine = household
     ? `${isOwner ? roleLabels.owner : roleLabels.member} · ${memberCountLabel(members.length)}`
@@ -51,7 +54,7 @@ export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; cla
 
       <nav aria-label="Hauptnavigation" className="flex flex-col gap-0.5">
         {sidebarItems.primary.map((item) => (
-          <SidebarLink key={item.key} item={item} />
+          <SidebarLink key={item.key} item={item} count={counts[item.key]} />
         ))}
         <div role="separator" className="mx-3 my-2.5 h-px bg-line" />
         {sidebarItems.secondary.map((item) => (
@@ -86,7 +89,7 @@ export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; cla
   );
 }
 
-function SidebarLink({ item }: { item: NavItem }) {
+function SidebarLink({ item, count }: { item: NavItem; count?: number }) {
   return (
     <NavLink
       to={item.path}
@@ -105,6 +108,12 @@ function SidebarLink({ item }: { item: NavItem }) {
           <>
             <Icon aria-hidden="true" className="size-5.5" />
             <span className="flex-1">{item.label}</span>
+            {count !== undefined && count > 0 && " "}
+            {count !== undefined && count > 0 && (
+              <span className="min-w-5.5 text-right text-caption font-semibold text-ink-muted tabular-nums">
+                {count}
+              </span>
+            )}
           </>
         );
       }}

@@ -60,6 +60,38 @@ export function relativeDay(
   return formatDate(date, timeZone);
 }
 
+/**
+ * Due date of a task (TSK-08, Phase 3 B11): «Gestern» / «Heute» / «Morgen», otherwise the date
+ * «Sa., 3. Okt.»; «Ohne Datum» without one. Both arguments are date keys («2026-10-03») in the
+ * household time zone.
+ */
+export function dueLabel(dueDate: string | null, todayKey: string, timeZone = DEFAULT_TIME_ZONE) {
+  if (dueDate === null) return "Ohne Datum";
+  const days = differenceInCalendarDays(fromDateKey(dueDate), fromDateKey(todayKey), {
+    in: tz("UTC"),
+  });
+  if (days === 0) return "Heute";
+  if (days === 1) return "Morgen";
+  if (days === -1) return "Gestern";
+  return formatDate(fromDateKey(dueDate), timeZone);
+}
+
+/**
+ * When a task was completed («Erledigt» rows, B5): «gerade eben» within the last minute,
+ * «Heute», «Gestern», otherwise the date «Mo., 28. Sept.».
+ */
+export function completedLabel(
+  completedAt: Date,
+  now: Date = new Date(),
+  timeZone = DEFAULT_TIME_ZONE,
+): string {
+  if (now.getTime() - completedAt.getTime() < 60_000) return "gerade eben";
+  const days = calendarDaysFrom(completedAt, now, timeZone);
+  if (days === 0) return "Heute";
+  if (days === -1) return "Gestern";
+  return formatDate(completedAt, timeZone);
+}
+
 /** Calendar date as «2026-10-03» in the given time zone (the value format of <input type="date">). */
 export function toDateKey(date: Date, timeZone = DEFAULT_TIME_ZONE): string {
   return fmt(date, "yyyy-MM-dd", timeZone);

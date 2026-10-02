@@ -20,6 +20,9 @@ vi.mock("../services/householdService", () =>
 vi.mock("../services/memberService", () =>
   import("./householdFakes").then((fakes) => fakes.memberServiceMock),
 );
+vi.mock("../services/taskService", () =>
+  import("./householdFakes").then((fakes) => fakes.taskServiceMock),
+);
 const invites = vi.hoisted(() => ({ regenerateInvite: vi.fn() }));
 vi.mock("../services/inviteService", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/inviteService")>()),
@@ -66,7 +69,9 @@ function LocationProbe() {
 }
 
 const currentPath = () => screen.getByTestId("location").textContent;
-const page = () => screen.findByRole("heading", { name: "Musterstrasse 12", level: 1 });
+// The lazy page can take more than findBy's default 1 s to load under full-suite load.
+const page = () =>
+  screen.findByRole("heading", { name: "Musterstrasse 12", level: 1 }, { timeout: 3000 });
 const section = (name: string) => screen.getByRole("region", { name });
 
 function mockDesktop(matches: boolean) {
@@ -107,7 +112,8 @@ describe("Haushalt page", () => {
       "NENevioDuBesitzer · Dabei seit 14.09.2026Besitzer",
       "ANAnnaMitglied · Dabei seit 20.09.2026Mitglied",
     ]);
-    expect(document.title).toBe("Haushalt – Household");
+    // The title is set in an effect, which can run after the heading shows up.
+    await waitFor(() => expect(document.title).toBe("Haushalt – Household"));
   });
 
   it("updates the member list live", async () => {

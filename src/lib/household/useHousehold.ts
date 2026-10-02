@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Household, Member } from "../../types";
+import type { Household, Member, Task } from "../../types";
 
 export interface HouseholdContextValue {
   /** null while loading or after an error. */
@@ -16,6 +16,14 @@ export interface HouseholdContextValue {
   error: Error | null;
   /** Subscribes again after an error. */
   retry: () => void;
+  /** All tasks of the household, unsorted (see domain/tasks). */
+  tasks: Task[];
+  /** True until the first task snapshot has arrived (D13). */
+  tasksLoading: boolean;
+  /** Task listener error (D14); doesn't affect `error`. */
+  tasksError: Error | null;
+  /** Subscribes to the tasks again after an error. */
+  retryTasks: () => void;
 }
 
 export const HouseholdContext = createContext<HouseholdContextValue | null>(null);
