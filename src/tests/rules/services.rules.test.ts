@@ -1,7 +1,7 @@
 import { type RulesTestEnvironment } from "@firebase/rules-unit-testing";
 import { doc, getDoc, getDocs, collection, updateDoc, type Firestore } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Household, UserProfile } from "../../types";
+import type { Household, Task, UserProfile } from "../../types";
 import {
   DAY_MS,
   anna,
@@ -10,6 +10,7 @@ import {
   dbAs,
   lea,
   nevio,
+  seedHousehold,
   seedProfiles,
   type TestUser,
 } from "./helpers";
@@ -30,6 +31,8 @@ const { updateMyProfile } = await import("../../services/memberService");
 const { householdConverter } = await import("../../lib/converters/householdConverter");
 const { listenToUserProfile } = await import("../../services/userService");
 const { nextConfirmedHouseholdId } = await import("../../lib/auth/confirmedHouseholdId");
+const { completeTask, createTask, deleteTask, listenToTasks, reopenTask, updateTask } =
+  await import("../../services/taskService");
 
 let env: RulesTestEnvironment;
 
@@ -215,5 +218,104 @@ describe("services against the rules", () => {
     await expect(createHousehold(profileOf(nevio), "Zweitwohnung")).rejects.toMatchObject({
       code: "permission-denied",
     });
+  });
+});
+
+describe("task services against the rules", () => {
+  const nameOf = (uid: string) => ({ nevio: "Nevio", anna: "Anna" })[uid];
+
+  async function activityTypes(hid: string) {
+    let types: string[] = [];
+    await asAdmin(env, async (db) => {
+      const snapshot = await getDocs(collection(db, "households", hid, "activity"));
+      types = snapshot.docs
+        .map((d) => d.data())
+        .sort((a, b) => a.createdAt.toMillis() - b.createdAt.toMillis())
+        .map((data) => data.type as string);
+    });
+    return types;
+  }
+
+  it("create → reassign → complete → reopen → delete; the other member sees it live", async () => {
+    await seedHousehold(env, { members: [anna] });
+    const hid = "h1";
+
+    signInAs(anna);
+    let seen: Task[] = [];
+    const stop = listenToTasks(
+      hid,
+      (tasks) => {
+        seen = tasks;
+      },
+      (error) => {
+        throw error;
+      },
+    );
+
+    signInAs(nevio);
+    const { id, committed } = createTask(
+      hid,
+      {
+        title: "Bad putzen",
+        notes: "Spiegel",
+        assigneeId: "nevio",
+        dueDate: "2026-10-03",
+        priority: "low",
+      },
+      "nevio",
+    );
+    await committed;
+    await vi.waitFor(() => expect(seen.map((t) => t.title)).toEqual(["Bad putzen"]));
+
+    const task = seen[0];
+    await updateTask(hid, task, { assigneeId: "anna", notes: null, title: "Bad" }, "nevio", nameOf);
+    await vi.waitFor(() => expect(seen[0]).toMatchObject({ title: "Bad", assigneeId: "anna" }));
+    expect(seen[0].notes).toBeUndefined();
+
+    signInAs(anna);
+    await completeTask(hid, seen[0], "anna");
+    await vi.waitFor(() => expect(seen[0]).toMatchObject({ status: "done", completedBy: "anna" }));
+    await reopenTask(hid, seen[0]);
+    await vi.waitFor(() => expect(seen[0].status).toBe("open"));
+    expect(seen[0].completedAt).toBeUndefined();
+
+    await deleteTask(hid, seen[0]);
+    await vi.waitFor(() => expect(seen).toEqual([]));
+    stop();
+
+    expect(id).toBe(task.id);
+    expect(await activityTypes(hid)).toEqual(["task_created", "task_assigned", "task_completed"]);
+  });
+
+  it("two members complete the same task: the second batch is rejected, one entry", async () => {
+    await seedHousehold(env, { members: [anna] });
+    const hid = "h1";
+    signInAs(nevio);
+    const { id, committed } = createTask(
+      hid,
+      { title: "Altpapier", assigneeId: null, dueDate: null, priority: "low" },
+      "nevio",
+    );
+    await committed;
+    const open: Task = {
+      id,
+      title: "Altpapier",
+      assigneeId: null,
+      dueDate: null,
+      priority: "low",
+      status: "open",
+      createdBy: "nevio",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      hasPendingWrites: false,
+    };
+
+    signInAs(anna);
+    await completeTask(hid, open, "anna");
+    signInAs(nevio);
+    await expect(completeTask(hid, open, "nevio")).rejects.toMatchObject({
+      code: "permission-denied",
+    });
+    expect((await activityTypes(hid)).filter((type) => type === "task_completed")).toHaveLength(1);
   });
 });

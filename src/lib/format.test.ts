@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   calendarDaysFrom,
+  completedLabel,
+  dueLabel,
   formatDate,
   formatLongDate,
   formatNumber,
@@ -131,5 +133,37 @@ describe("quickPickDates", () => {
   it("uses the local day just after midnight", () => {
     // 23:30 UTC on Fri 2 Oct = 01:30 Sat 3 Oct in Zurich
     expect(keys(utc("2026-10-02T23:30:00Z"))[0]).toEqual(["Heute", "2026-10-03"]);
+  });
+});
+
+describe("dueLabel", () => {
+  it("is relative around today, otherwise the date (B11)", () => {
+    expect(dueLabel("2026-09-29", "2026-09-30")).toBe("Gestern");
+    expect(dueLabel("2026-09-30", "2026-09-30")).toBe("Heute");
+    expect(dueLabel("2026-10-01", "2026-09-30")).toBe("Morgen");
+    expect(dueLabel("2026-10-03", "2026-09-30")).toBe("Sa., 3. Okt.");
+    expect(dueLabel("2026-09-28", "2026-09-30")).toBe("Mo., 28. Sept.");
+    expect(dueLabel(null, "2026-09-30")).toBe("Ohne Datum");
+  });
+
+  it("works across the DST change and month ends", () => {
+    expect(dueLabel("2026-10-26", "2026-10-25")).toBe("Morgen");
+    expect(dueLabel("2026-10-31", "2026-11-01")).toBe("Gestern");
+  });
+});
+
+describe("completedLabel", () => {
+  const now = utc("2026-09-30T10:00:00Z");
+
+  it("«gerade eben», «Heute», «Gestern», otherwise the date", () => {
+    expect(completedLabel(utc("2026-09-30T09:59:30Z"), now)).toBe("gerade eben");
+    expect(completedLabel(utc("2026-09-30T06:00:00Z"), now)).toBe("Heute");
+    expect(completedLabel(utc("2026-09-29T20:00:00Z"), now)).toBe("Gestern");
+    expect(completedLabel(utc("2026-09-28T10:00:00Z"), now)).toBe("Mo., 28. Sept.");
+  });
+
+  it("uses the calendar day of the household time zone", () => {
+    // 22:30 UTC on 29 Sept is already 30 Sept in Zurich.
+    expect(completedLabel(utc("2026-09-29T22:30:00Z"), now)).toBe("Heute");
   });
 });

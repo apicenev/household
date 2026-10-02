@@ -41,7 +41,7 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
-`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). Running it again keeps the household and replaces the code once it has expired.
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). Running it again keeps the household and replaces the code once it has expired.
 
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
@@ -73,22 +73,22 @@ To remove someone: disable or delete the account (an open session can stay valid
 
 ## Scripts
 
-| Script                            | What it does                                                  |
-| --------------------------------- | ------------------------------------------------------------- |
-| `npm run dev`                     | Dev server against the project in `.env.local`                |
-| `npm run dev:emu`                 | Dev server against the local emulators                        |
-| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data) |
-| `npm run seed`                    | Create the test accounts in the emulators                     |
-| `npm run seed -- --household`     | … plus «Musterstrasse 12» for Nevio; prints the invite code   |
-| `npm run build`                   | Type-check and build to `dist/`                               |
-| `npm run preview`                 | Serve the production build locally                            |
-| `npm run typecheck`               | TypeScript only                                               |
-| `npm run lint`                    | ESLint                                                        |
-| `npm run format` / `format:check` | Prettier write / check                                        |
-| `npm test` / `test:run`           | Unit and component tests (watch / single run)                 |
-| `npm run test:coverage`           | Tests with coverage report in `coverage/`                     |
-| `npm run test:rules`              | Firestore security rules tests (starts the emulator)          |
-| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project   |
+| Script                            | What it does                                                    |
+| --------------------------------- | --------------------------------------------------------------- |
+| `npm run dev`                     | Dev server against the project in `.env.local`                  |
+| `npm run dev:emu`                 | Dev server against the local emulators                          |
+| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)   |
+| `npm run seed`                    | Create the test accounts in the emulators                       |
+| `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks for Nevio; prints the code |
+| `npm run build`                   | Type-check and build to `dist/`                                 |
+| `npm run preview`                 | Serve the production build locally                              |
+| `npm run typecheck`               | TypeScript only                                                 |
+| `npm run lint`                    | ESLint                                                          |
+| `npm run format` / `format:check` | Prettier write / check                                          |
+| `npm test` / `test:run`           | Unit and component tests (watch / single run)                   |
+| `npm run test:coverage`           | Tests with coverage report in `coverage/`                       |
+| `npm run test:rules`              | Firestore security rules tests (starts the emulator)            |
+| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project     |
 
 ## Testing
 
@@ -103,7 +103,8 @@ All app data belongs to a **household**; a user belongs to at most one (`users/{
 users/{uid}                          own profile: name, initials, avatar colour, householdId
 households/{hid}                     name, ownerId, memberIds[], weekStartsOn, timeZone, inviteCode, inviteCreatedAt
 households/{hid}/members/{uid}       profile copy for display, role (owner | member), joinedAt
-households/{hid}/activity/{id}       append-only log («member_joined», later tasks, shopping, events)
+households/{hid}/tasks/{taskId}      title, notes?, assigneeId, dueDate ("YYYY-MM-DD"), priority, status, completedAt/By
+households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned; later shopping, events)
 invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
 ```
 
@@ -112,6 +113,8 @@ invites/{code}                       code lookup (ABC-1234) with a small preview
 - Only members read a household and its subcollections; only the owner changes settings, creates a new code or deletes the household.
 - Joining requires the household's **current, unexpired** code (7 days after `inviteCreatedAt`, server time) and adds only the caller. Codes can be read one at a time by any signed-in user, never listed.
 - Multi-document writes (create, join, new code, profile edits) are single batches, and the rules cross-check the other documents of the batch with `getAfter()`, so an incomplete batch is rejected as a whole.
+- Every member reads and writes every task; the rules validate the fields (title 1–200, notes ≤ 2000, priority, date format, assignee is a member) and the status changes (complete sets `completedBy` = caller and server time; reopen removes both).
+- Task activity entries must match the task after the batch (title snapshot, «done» for a completion).
 - Activity entries are append-only; everything not matched is denied.
 
 ## Deployment

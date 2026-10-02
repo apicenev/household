@@ -5,7 +5,8 @@
  *
  * With `--household` (Phase 2) it also creates «Musterstrasse 12» with Nevio as owner and
  * prints its invite code. Anna stays without a household, so the join flow can be tested in
- * a second browser profile.
+ * a second browser profile. Since Phase 3 the household also gets the design's example tasks
+ * (relative to today), unless it has tasks already.
  *
  * Usage: npm run emulators (in another terminal), then `npm run seed` or
  * `npm run seed -- --household`.
@@ -17,6 +18,7 @@ import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
 import { generateInviteCode, inviteExpiresAt, isInviteExpired } from "../src/domain/invite";
 import { avatarColorFor, initialsFor } from "../src/domain/member";
+import { todayKey } from "../src/domain/tasks";
 
 const PROJECT_ID = "demo-household";
 const AUTH_HOST = "127.0.0.1:9099";
@@ -66,9 +68,13 @@ async function freeInviteCode(db: Firestore): Promise<string> {
 
 /**
  * «Musterstrasse 12» with Nevio as owner, written like householdService.createHousehold
- * (household, owner member doc, invite, profile householdId). Returns the current code.
+ * (household, owner member doc, invite, profile householdId). Returns its id and code.
  */
-async function seedHousehold(db: Firestore, uid: string, displayName: string): Promise<string> {
+async function seedHousehold(
+  db: Firestore,
+  uid: string,
+  displayName: string,
+): Promise<{ hid: string; code: string }> {
   const profileRef = db.doc(`users/${uid}`);
   const profile = (await profileRef.get()).data();
   const existingId = profile?.householdId as string | null | undefined;
@@ -79,7 +85,7 @@ async function seedHousehold(db: Firestore, uid: string, displayName: string): P
       const createdAt = (household.inviteCreatedAt as Timestamp).toDate();
       if (!isInviteExpired(createdAt)) {
         console.log(`= household «${household.name}» exists (${existingId})`);
-        return household.inviteCode as string;
+        return { hid: existingId, code: household.inviteCode as string };
       }
       // Expired: replace the code like «Neuer Code».
       const code = await freeInviteCode(db);
@@ -101,7 +107,7 @@ async function seedHousehold(db: Firestore, uid: string, displayName: string): P
       });
       await batch.commit();
       console.log(`~ household «${household.name}»: expired code replaced`);
-      return code;
+      return { hid: existingId, code };
     }
   }
 
@@ -153,7 +159,85 @@ async function seedHousehold(db: Firestore, uid: string, displayName: string): P
   }
   await batch.commit();
   console.log(`+ household «${HOUSEHOLD_NAME}» created (${hid})`);
-  return code;
+  return { hid, code };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Date key `days` days from today in Zurich. */
+function dayFromToday(days: number): string {
+  return todayKey(new Date(Date.now() + days * DAY_MS), "Europe/Zurich");
+}
+
+/**
+ * The example tasks of `Tasks.dc.html` (Phase 3 §3.8), relative to today, plus two completed
+ * ones. Skipped when the household has tasks already, so reruns don't duplicate them.
+ */
+async function seedTasks(db: Firestore, hid: string, ownerUid: string): Promise<void> {
+  const tasks = db.collection(`households/${hid}/tasks`);
+  if (!(await tasks.limit(1).get()).empty) {
+    console.log("= tasks exist");
+    return;
+  }
+  const now = Timestamp.now();
+  const open = [
+    {
+      title: "Pflanzen giessen",
+      notes: "Küchenkräuter, Monstera und Balkonkisten.",
+      assigneeId: ownerUid,
+      dueDate: dayFromToday(-1),
+      priority: "low",
+    },
+    {
+      title: "Altpapier rausbringen",
+      notes: "Papier bündeln und vor 20:00 rausstellen.",
+      assigneeId: ownerUid,
+      dueDate: dayFromToday(0),
+      priority: "low",
+    },
+    { title: "Küche putzen", assigneeId: null, dueDate: dayFromToday(0), priority: "high" },
+    {
+      title: "Bettwäsche wechseln",
+      assigneeId: ownerUid,
+      dueDate: dayFromToday(4),
+      priority: "medium",
+    },
+    {
+      title: "Vermieter wegen Heizung anrufen",
+      notes: "Heizkörper im Schlafzimmer bleibt kalt.",
+      assigneeId: null,
+      dueDate: null,
+      priority: "low",
+    },
+  ];
+  const done = [
+    { title: "Bad putzen", assigneeId: ownerUid, dueDate: dayFromToday(-2), daysAgo: 1 },
+    { title: "Altpapier rausbringen", assigneeId: ownerUid, dueDate: dayFromToday(-3), daysAgo: 3 },
+  ];
+  const batch = db.batch();
+  for (const task of open) {
+    batch.set(tasks.doc(), {
+      ...task,
+      status: "open",
+      createdBy: ownerUid,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  for (const { daysAgo, ...task } of done) {
+    batch.set(tasks.doc(), {
+      ...task,
+      priority: "low",
+      status: "done",
+      completedAt: Timestamp.fromMillis(Date.now() - daysAgo * DAY_MS),
+      completedBy: ownerUid,
+      createdBy: ownerUid,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  await batch.commit();
+  console.log(`+ ${open.length} open and ${done.length} completed tasks`);
 }
 
 async function main() {
@@ -186,7 +270,8 @@ async function main() {
 
   if (withHousehold) {
     const db = getFirestore(app);
-    const code = await seedHousehold(db, uids[0], accounts[0].displayName);
+    const { hid, code } = await seedHousehold(db, uids[0], accounts[0].displayName);
+    await seedTasks(db, hid, uids[0]);
     const invite = (await db.doc(`invites/${code}`).get()).data();
     const validUntil = inviteExpiresAt((invite?.createdAt as Timestamp).toDate());
     console.log(

@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { Household, Member, UserProfile } from "../types";
+import type { Household, Member, NewTaskInput, Task, TaskChanges, UserProfile } from "../types";
 
 /**
  * In-memory stand-ins for the household, member and invite services, for component and
@@ -45,6 +45,26 @@ export function makeMember(overrides: Partial<Member> & { uid: string }): Member
   };
 }
 
+let taskSeq = 0;
+
+/** A task as the provider exposes it; open, unassigned, no date, «Niedrig» by default. */
+export function makeTask(overrides: Partial<Task> = {}): Task {
+  taskSeq += 1;
+  return {
+    id: `task${taskSeq}`,
+    title: `Aufgabe ${taskSeq}`,
+    assigneeId: null,
+    dueDate: null,
+    priority: "low",
+    status: "open",
+    createdBy: "nevio",
+    createdAt: new Date(Date.UTC(2026, 8, 1, 10, 0, taskSeq)),
+    updatedAt: new Date(Date.UTC(2026, 8, 1, 10, 0, taskSeq)),
+    hasPendingWrites: false,
+    ...overrides,
+  };
+}
+
 export const defaultMembers = (): Member[] => [
   makeMember({ uid: "anna", displayName: "Anna", initials: "AN" }),
   makeMember({
@@ -66,12 +86,18 @@ interface Listener<T> {
 export const fakeStore = {
   household: makeHousehold() as Household | null,
   members: defaultMembers(),
+  tasks: [] as Task[],
   /** When set, the listeners fail with it. */
   error: null as Error | null,
+  /** When set, only the task listener fails with it. */
+  tasksError: null as Error | null,
+  /** The task listener doesn't answer until emitTasks() (D13). */
+  holdTasks: false,
   /** Listeners don't answer until emit() (loading state). */
   hold: false,
   householdListeners: new Set<Listener<Household | null>>(),
   memberListeners: new Set<Listener<Member[]>>(),
+  taskListeners: new Set<Listener<Task[]>>(),
   /** Household ids in subscription / unsubscription order. */
   subscribed: [] as string[],
   unsubscribed: [] as string[],
@@ -79,10 +105,14 @@ export const fakeStore = {
   reset() {
     this.household = makeHousehold();
     this.members = defaultMembers();
+    this.tasks = [];
     this.error = null;
+    this.tasksError = null;
     this.hold = false;
+    this.holdTasks = false;
     this.householdListeners.clear();
     this.memberListeners.clear();
+    this.taskListeners.clear();
     this.subscribed = [];
     this.unsubscribed = [];
   },
@@ -91,8 +121,25 @@ export const fakeStore = {
   emit() {
     for (const listener of this.householdListeners) deliverHousehold(listener);
     for (const listener of this.memberListeners) deliverMembers(listener);
+    this.emitTasks();
+  },
+
+  /** Delivers the current tasks to every task listener. */
+  emitTasks() {
+    for (const listener of this.taskListeners) deliverTasks(listener);
+  },
+
+  /** Replaces the tasks and delivers them (another member's change, a server echo). */
+  setTasks(tasks: Task[]) {
+    this.tasks = tasks;
+    this.emitTasks();
   },
 };
+
+function deliverTasks(listener: Listener<Task[]>) {
+  if (fakeStore.tasksError) listener.onError(fakeStore.tasksError);
+  else listener.onChange(fakeStore.tasks);
+}
 
 function deliverHousehold(listener: Listener<Household | null>) {
   if (fakeStore.error) listener.onError(fakeStore.error);
@@ -143,4 +190,40 @@ export const memberServiceMock = {
     onError: (error: Error) => void,
   ) => listen(fakeStore.memberListeners, deliverMembers, hid, onChange, onError),
   updateMyProfile: vi.fn(),
+};
+
+export const taskServiceMock = {
+  listenToTasks: (
+    hid: string,
+    onChange: (tasks: Task[]) => void,
+    onError: (error: Error) => void,
+  ) => {
+    const listener = { hid, onChange, onError };
+    fakeStore.taskListeners.add(listener);
+    if (!fakeStore.holdTasks) deliverTasks(listener);
+    return () => {
+      fakeStore.taskListeners.delete(listener);
+    };
+  },
+  createTask:
+    vi.fn<
+      (
+        hid: string,
+        input: NewTaskInput,
+        actorId: string,
+      ) => { id: string; committed: Promise<void> }
+    >(),
+  updateTask:
+    vi.fn<
+      (
+        hid: string,
+        task: Task,
+        changes: TaskChanges,
+        actorId: string,
+        nameOf: (uid: string) => string | undefined,
+      ) => Promise<void>
+    >(),
+  completeTask: vi.fn<(hid: string, task: Task, actorId: string) => Promise<void>>(),
+  reopenTask: vi.fn<(hid: string, task: Task) => Promise<void>>(),
+  deleteTask: vi.fn<(hid: string, task: Task) => Promise<void>>(),
 };

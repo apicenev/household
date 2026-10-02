@@ -14,4 +14,5 @@ export type {
   MyProfileUpdate,
   WeekStart,
 } from "./Household";
+export type { NewTaskInput, Task, TaskChanges, TaskPriority, TaskStatus } from "./Task";
 export type { AvatarColor, UserProfile, UserProfileUpdate } from "./UserProfile";

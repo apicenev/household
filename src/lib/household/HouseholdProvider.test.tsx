@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeStore, makeMember } from "../../tests/householdFakes";
+import { fakeStore, makeMember, makeTask } from "../../tests/householdFakes";
 import { HouseholdProvider } from "./HouseholdProvider";
 import { useHousehold } from "./useHousehold";
 
@@ -11,6 +11,28 @@ vi.mock("../../services/householdService", () =>
 vi.mock("../../services/memberService", () =>
   import("../../tests/householdFakes").then((fakes) => fakes.memberServiceMock),
 );
+vi.mock("../../services/taskService", () =>
+  import("../../tests/householdFakes").then((fakes) => fakes.taskServiceMock),
+);
+
+function TasksProbe() {
+  const { tasks, tasksLoading, tasksError, retryTasks } = useHousehold();
+  return (
+    <>
+      <output data-testid="tasks">
+        {JSON.stringify({
+          tasks: tasks.map((task) => task.id),
+          tasksLoading,
+          tasksError: tasksError?.message ?? null,
+          pending: tasks.filter((task) => task.hasPendingWrites).map((task) => task.id),
+        })}
+      </output>
+      <button type="button" onClick={retryTasks}>
+        retryTasks
+      </button>
+    </>
+  );
+}
 
 function Probe() {
   const { household, members, me, isOwner, memberById, loading, error } = useHousehold();
@@ -35,6 +57,7 @@ function renderProvider(uid: string) {
   return render(
     <HouseholdProvider householdId="h1" uid={uid}>
       <Probe />
+      <TasksProbe />
     </HouseholdProvider>,
   );
 }
@@ -98,5 +121,47 @@ describe("HouseholdProvider", () => {
     expect(fakeStore.householdListeners.size).toBe(0);
     expect(fakeStore.memberListeners.size).toBe(0);
     expect(fakeStore.unsubscribed).toEqual(["h1"]);
+  });
+
+  it("exposes the tasks with their own loading state, without blocking the shell", () => {
+    fakeStore.holdTasks = true;
+    renderProvider("nevio");
+    expect(screen.getByTestId("tasks").textContent).toBe(
+      JSON.stringify({ tasks: [], tasksLoading: true, tasksError: null, pending: [] }),
+    );
+    expect(state().loading).toBe(false);
+    fakeStore.tasks = [makeTask({ id: "t1" }), makeTask({ id: "t2", hasPendingWrites: true })];
+    act(() => fakeStore.emitTasks());
+    expect(JSON.parse(screen.getByTestId("tasks").textContent ?? "")).toEqual({
+      tasks: ["t1", "t2"],
+      tasksLoading: false,
+      tasksError: null,
+      pending: ["t2"],
+    });
+  });
+
+  it("reports a task listener error separately and retries it", () => {
+    fakeStore.tasksError = new Error("boom");
+    renderProvider("nevio");
+    expect(state()).toMatchObject({ loading: false, error: null, name: "Musterstrasse 12" });
+    expect(JSON.parse(screen.getByTestId("tasks").textContent ?? "")).toMatchObject({
+      tasksLoading: false,
+      tasksError: "boom",
+    });
+    fakeStore.tasksError = null;
+    fakeStore.tasks = [makeTask({ id: "t1" })];
+    act(() => screen.getByRole("button", { name: "retryTasks" }).click());
+    expect(JSON.parse(screen.getByTestId("tasks").textContent ?? "")).toMatchObject({
+      tasks: ["t1"],
+      tasksError: null,
+    });
+    expect(fakeStore.taskListeners.size).toBe(1);
+  });
+
+  it("unsubscribes the task listener on unmount", () => {
+    const { unmount } = renderProvider("nevio");
+    expect(fakeStore.taskListeners.size).toBe(1);
+    unmount();
+    expect(fakeStore.taskListeners.size).toBe(0);
   });
 });

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { isOwner, sortMembers } from "../../domain/household";
 import { listenToHousehold } from "../../services/householdService";
 import { listenToMembers } from "../../services/memberService";
-import type { Household, Member } from "../../types";
+import { listenToTasks } from "../../services/taskService";
+import type { Household, Member, Task } from "../../types";
 import { HouseholdContext, type HouseholdContextValue } from "./useHousehold";
 
 interface Snapshot {
@@ -21,10 +22,20 @@ const initial: Snapshot = {
   error: null,
 };
 
+interface TasksSnapshot {
+  tasks: Task[];
+  loaded: boolean;
+  error: Error | null;
+}
+
+const initialTasks: TasksSnapshot = { tasks: [], loaded: false, error: null };
+
 /**
- * Realtime store of one household (NFR-03): the household document and its members. Mount it
- * with `key={householdId}`, so a change of household tears down all listeners. Later phases
- * add tasks, shopping, events and activity here.
+ * Realtime store of one household (NFR-03): the household document, its members and tasks.
+ * Mount it with `key={householdId}`, so a change of household tears down all listeners.
+ * `loading` (which gates the shell) waits only for household and members; the task list has
+ * its own loading and error state, so it never blocks the shell (Phase 3 D13, D14). Later
+ * phases add shopping, events and activity here.
  */
 export function HouseholdProvider({
   householdId,
@@ -37,6 +48,8 @@ export function HouseholdProvider({
 }) {
   const [snapshot, setSnapshot] = useState<Snapshot>(initial);
   const [attempt, setAttempt] = useState(0);
+  const [tasksSnapshot, setTasksSnapshot] = useState<TasksSnapshot>(initialTasks);
+  const [tasksAttempt, setTasksAttempt] = useState(0);
 
   useEffect(() => {
     const fail = (error: Error) => setSnapshot((current) => ({ ...current, error }));
@@ -67,9 +80,24 @@ export function HouseholdProvider({
     };
   }, [householdId, attempt]);
 
+  useEffect(
+    () =>
+      listenToTasks(
+        householdId,
+        (tasks) => setTasksSnapshot({ tasks, loaded: true, error: null }),
+        (error) => setTasksSnapshot((current) => ({ ...current, error })),
+      ),
+    [householdId, tasksAttempt],
+  );
+
   const retry = useCallback(() => {
     setSnapshot(initial);
     setAttempt((count) => count + 1);
+  }, []);
+
+  const retryTasks = useCallback(() => {
+    setTasksSnapshot(initialTasks);
+    setTasksAttempt((count) => count + 1);
   }, []);
 
   const value = useMemo<HouseholdContextValue>(() => {
@@ -84,8 +112,12 @@ export function HouseholdProvider({
       loading: !error && !(snapshot.householdLoaded && snapshot.membersLoaded),
       error,
       retry,
+      tasks: tasksSnapshot.tasks,
+      tasksLoading: !tasksSnapshot.loaded && !tasksSnapshot.error,
+      tasksError: tasksSnapshot.error,
+      retryTasks,
     };
-  }, [snapshot, uid, retry]);
+  }, [snapshot, tasksSnapshot, uid, retry, retryTasks]);
 
   return <HouseholdContext.Provider value={value}>{children}</HouseholdContext.Provider>;
 }

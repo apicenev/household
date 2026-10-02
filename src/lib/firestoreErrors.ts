@@ -12,6 +12,9 @@ export function isOfflineError(error: unknown): boolean {
   return firestoreErrorCode(error) === "unavailable";
 }
 
+/** Generic message for a failed write, e.g. a rejected task write (Phase 3 D21). */
+export const GENERIC_WRITE_ERROR = "Das hat nicht geklappt. Versuch es nochmals.";
+
 /** German message for a failed Firestore write. */
 export function firestoreErrorMessage(error: unknown): string {
   switch (firestoreErrorCode(error)) {
@@ -20,6 +23,6 @@ export function firestoreErrorMessage(error: unknown): string {
     case "permission-denied":
       return "Dazu hast du keine Berechtigung.";
     default:
-      return "Das hat nicht geklappt. Versuch es nochmals.";
+      return GENERIC_WRITE_ERROR;
   }
 }

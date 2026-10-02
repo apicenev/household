@@ -12,13 +12,14 @@ import {
 
 const LoginPage = lazy(() => import("../pages/LoginPage"));
 const HouseholdPage = lazy(() => import("../pages/HouseholdPage"));
+const TasksPage = lazy(() => import("../pages/TasksPage"));
 const OnboardingChoicePage = lazy(() => import("../pages/onboarding/OnboardingChoicePage"));
 const CreateHouseholdPage = lazy(() => import("../pages/onboarding/CreateHouseholdPage"));
 const JoinHouseholdPage = lazy(() => import("../pages/onboarding/JoinHouseholdPage"));
 // Dev-only primitives gallery; the DEV check lets the production build drop it.
 const UiGalleryPage = import.meta.env.DEV ? lazy(() => import("../pages/dev/UiGalleryPage")) : null;
 
-/** Route table (Phase 1 §1.9, Phase 2 §2.6). */
+/** Route table (Phase 1 §1.9, Phase 2 §2.6, Phase 3). */
 export function AppRoutes() {
   return (
     <Routes>
@@ -39,7 +40,7 @@ export function AppRoutes() {
           {/* MemberRoute renders the shell around these. */}
           <Route element={<MemberRoute />}>
             <Route path="/dashboard" element={<ComingSoonPage area="dashboard" />} />
-            <Route path="/tasks" element={<ComingSoonPage area="tasks" />} />
+            <Route path="/tasks" element={<TasksPage />} />
             <Route path="/shopping" element={<ComingSoonPage area="shopping" />} />
             <Route path="/calendar" element={<ComingSoonPage area="calendar" />} />
             <Route path="/activity" element={<ComingSoonPage area="activity" />} />

@@ -5,11 +5,12 @@ import type { AvatarColor } from "../../types";
 export type { AvatarColor };
 
 /**
- * Diameter in px. The sheet names sm 24 / md 32 / lg 48 / xl 72; 28 (rows, chips, selects),
- * 34 (top bar), 36 (menu, sidebar, activity), 40 (member rows), 56 (onboarding, desktop
- * profile) and 64 (mobile profile) are used by the screens.
+ * Diameter in px. The sheet names sm 24 / md 32 / lg 48 / xl 72; 26 (task detail panel), 28
+ * (rows, chips, selects), 30 («Zuständig» pills in the desktop task dialog), 34 (top bar), 36
+ * (menu, sidebar, activity), 40 (member rows), 56 (onboarding, desktop profile) and 64
+ * (mobile profile) are used by the screens.
  */
-export type AvatarSize = 24 | 28 | 32 | 34 | 36 | 40 | 48 | 56 | 64 | 72;
+export type AvatarSize = 24 | 26 | 28 | 30 | 32 | 34 | 36 | 40 | 48 | 56 | 64 | 72;
 
 /** sans: initials in the UI font · display: Newsreader (profile avatars). */
 export type AvatarTypeface = "sans" | "display";
@@ -27,7 +28,9 @@ const colors: Record<AvatarColor, string> = {
 
 const sizes: Record<AvatarSize, string> = {
   24: "size-6 text-[10px] font-[650]",
+  26: "size-6.5 text-[10px] font-[650]",
   28: "size-7 text-[11px] font-[650]",
+  30: "size-7.5 text-[11px] font-[650]",
   32: "size-8 text-caption font-[650]",
   34: "size-8.5 text-[13px] font-[650]",
   36: "size-9 text-[13px] font-[650] tracking-[0.02em]",

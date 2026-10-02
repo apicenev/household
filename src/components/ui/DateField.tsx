@@ -21,6 +21,8 @@ export interface DateFieldProps {
   clearable?: boolean;
   /** Shows «Heute» / «Morgen» / next Saturday chips below the field. */
   quickPicks?: boolean;
+  /** Adds an «Ohne Datum» chip after the quick picks (clears the date; task sheet). */
+  noDatePick?: boolean;
   /** Injectable for tests. */
   today?: Date;
   timeZone?: string;
@@ -43,6 +45,7 @@ export function DateField({
   placeholder = "Ohne Datum",
   clearable = true,
   quickPicks = false,
+  noDatePick = false,
   today = new Date(),
   timeZone = DEFAULT_TIME_ZONE,
   className,
@@ -53,7 +56,10 @@ export function DateField({
   const ids = { helperId: `${inputId}-helper`, errorId: `${inputId}-error` };
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const picks = quickPicks ? quickPickDates(today, timeZone) : [];
+  const picks: Array<{ label: string; key: string; ariaLabel?: string }> = [
+    ...(quickPicks ? quickPickDates(today, timeZone) : []),
+    ...(noDatePick ? [{ label: placeholder, key: "" }] : []),
+  ];
 
   function openPicker() {
     try {
