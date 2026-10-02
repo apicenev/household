@@ -1,2 +1,2 @@
-// Barrel for shared domain types. Entities are added from Phase 1 on.
-export {};
+// Barrel for shared domain types.
+export type { AvatarColor, UserProfile, UserProfileUpdate } from "./UserProfile";

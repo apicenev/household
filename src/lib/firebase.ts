@@ -30,6 +30,8 @@ export const firebaseProjectId: string = firebaseConfig.projectId;
 
 export const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
+// German texts for anything Firebase Auth itself shows or sends.
+auth.languageCode = "de";
 export const db = getFirestore(app);
 
 if (usingEmulators) {

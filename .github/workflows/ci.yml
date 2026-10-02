@@ -1,13 +1,13 @@
 name: CI
 
 # Quality gate only. Deployments are handled by Vercel's Git integration
-# (preview per PR/branch, production on master) — see vercel.json.
+# (preview for dev and PRs, production on master) — see vercel.json.
 
 on:
   pull_request:
     branches: [master]
   push:
-    branches: [master]
+    branches: [master, dev]
 
 concurrency:
   group: ci-${{ github.ref }}
