@@ -75,3 +75,41 @@ export const offlineMessage = {
   title: "Keine Verbindung",
   text: "Änderungen werden synchronisiert, sobald du wieder online bist.",
 } as const;
+
+/** Member roles (requirements §3). */
+export const roleLabels = {
+  owner: "Besitzer",
+  member: "Mitglied",
+} as const;
+
+/** Names of the avatar colours 1–8, for screen readers (HH-05). */
+export const avatarColorNames = {
+  1: "Terrakotta",
+  2: "Honig",
+  3: "Olive",
+  4: "Salbei",
+  5: "Seegrün",
+  6: "Taubenblau",
+  7: "Lavendel",
+  8: "Rosé",
+} as const;
+
+/** «1 Mitglied» / «2 Mitglieder» */
+export function memberCountLabel(count: number): string {
+  return count === 1 ? "1 Mitglied" : `${count} Mitglieder`;
+}
+
+/** Household and invite wording shared by onboarding and the Haushalt page. */
+export const householdCopy = {
+  memberSince: "Dabei seit",
+  nameEmpty: "Gib einen Namen ein.",
+  nameTooLong: "Der Name darf höchstens 50 Zeichen lang sein.",
+  creating: "Erstellt…",
+  codeFormatHint: "Format: drei Buchstaben, Bindestrich, vier Ziffern",
+  codeFound: "Code gefunden",
+  codeNotFound: "Diesen Code gibt es nicht. Prüfe die Schreibweise.",
+  codeExpired: "Dieser Code ist abgelaufen. Bitte um einen neuen.",
+  copyCode: "Code kopieren",
+  copied: "Kopiert",
+  newCode: "Neuer Code",
+} as const;

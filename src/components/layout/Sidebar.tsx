@@ -1,6 +1,8 @@
 import { EllipsisHorizontalIcon, PlusIcon } from "@heroicons/react/20/solid";
 import { NavLink } from "react-router-dom";
 import { useCurrentMember } from "../../lib/auth/useCurrentMember";
+import { memberCountLabel, roleLabels } from "../../lib/copy";
+import { useHousehold } from "../../lib/household/useHousehold";
 import { cx } from "../../lib/cx";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
@@ -9,12 +11,17 @@ import { BrandTile } from "./BrandMark";
 import { sidebarItems, type NavItem } from "./navigation";
 
 /**
- * Desktop sidebar (Sidebar.dc.html), 272 px on sunken: brand, «Neu», primary and secondary
- * navigation, account footer. The household name under the brand and the counts next to
- * Aufgaben / Einkauf arrive with Phases 2, 3 and 5.
+ * Desktop sidebar (Sidebar.dc.html), 272 px on sunken: brand with the household name, «Neu»,
+ * primary and secondary navigation, account footer with the role line («Besitzer · 2
+ * Mitglieder»). The counts next to Aufgaben / Einkauf arrive with Phases 3 and 5.
  */
 export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; className?: string }) {
   const member = useCurrentMember();
+  const { household, members, isOwner } = useHousehold();
+  // Without a household (load error, D8) the footer falls back to the email.
+  const roleLine = household
+    ? `${isOwner ? roleLabels.owner : roleLabels.member} · ${memberCountLabel(members.length)}`
+    : member.email;
 
   return (
     <aside
@@ -26,8 +33,15 @@ export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; cla
     >
       <div className="flex items-center gap-2.5 px-2">
         <BrandTile size={36} />
-        <span className="font-display text-[20px] leading-6 font-medium tracking-[-0.01em]">
-          Household
+        <span className="flex min-w-0 flex-col">
+          <span className="font-display text-[20px] leading-6 font-medium tracking-[-0.01em]">
+            Household
+          </span>
+          {household && (
+            <span className="truncate text-caption font-normal text-ink-muted">
+              {household.name}
+            </span>
+          )}
         </span>
       </div>
 
@@ -61,9 +75,7 @@ export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; cla
                 <span className="truncate text-body-sm leading-[18px] font-semibold">
                   {member.name}
                 </span>
-                <span className="truncate text-caption font-normal text-ink-muted">
-                  {member.email}
-                </span>
+                <span className="truncate text-caption font-normal text-ink-muted">{roleLine}</span>
               </span>
               <EllipsisHorizontalIcon aria-hidden="true" className="size-5 text-ink-muted" />
             </button>

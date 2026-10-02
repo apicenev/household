@@ -3,14 +3,31 @@ import { cx } from "../../lib/cx";
 import { Avatar } from "../ui/Avatar";
 
 /**
- * Full-screen layout of the auth screens (`Auth Onboarding`): one column on canvas on phones;
- * from lg a split view with the brand panel on the left and a 400 px column on the right.
+ * Full-screen layout of the auth and onboarding screens (`Auth Onboarding`): one column on
+ * canvas on phones; from lg a split view with the brand panel on the left and a 400 px column
+ * on the right (onboarding desktop: D1). `compactTop`: 28 px instead of 48 px above the
+ * content on phones, for screens that start with a back button.
  */
-export function AuthLayout({ children, className }: { children: ReactNode; className?: string }) {
+export function AuthLayout({
+  children,
+  compactTop = false,
+  className,
+}: {
+  children: ReactNode;
+  compactTop?: boolean;
+  className?: string;
+}) {
   return (
     <div className="min-h-dvh bg-canvas lg:grid lg:grid-cols-2">
       <BrandPanel />
-      <main className="flex min-h-dvh flex-col px-6 pt-[calc(env(safe-area-inset-top)+--spacing(12))] pb-[max(--spacing(6),env(safe-area-inset-bottom))] lg:items-center lg:justify-center lg:px-30 lg:py-12">
+      <main
+        className={cx(
+          "flex min-h-dvh flex-col px-6 pb-[max(--spacing(6),env(safe-area-inset-bottom))] lg:items-center lg:justify-center lg:px-30 lg:py-12",
+          compactTop
+            ? "pt-[calc(env(safe-area-inset-top)+--spacing(7))]"
+            : "pt-[calc(env(safe-area-inset-top)+--spacing(12))]",
+        )}
+      >
         <div
           className={cx(
             "flex w-full flex-1 flex-col sm:mx-auto sm:max-w-100 lg:w-100 lg:flex-none",

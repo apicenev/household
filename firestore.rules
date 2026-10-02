@@ -13,6 +13,10 @@ rules_version = '2';
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
+// Multi-document writes (create a household, join, new code, profile edits) are single
+// batches. The rules cross-check the other documents of a batch with getAfter(), so an
+// incomplete batch is rejected as a whole (NFR-05).
+//
 // Emulator tests: src/tests/rules/.
 
 service cloud.firestore {
@@ -26,51 +30,319 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == uid;
     }
 
+    function userPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function householdPath(hid) {
+      return /databases/$(database)/documents/households/$(hid);
+    }
+
+    function memberPath(hid, uid) {
+      return /databases/$(database)/documents/households/$(hid)/members/$(uid);
+    }
+
+    function invitePath(code) {
+      return /databases/$(database)/documents/invites/$(code);
+    }
+
+    // The caller's profile before / after the current write or batch.
+    function profile() {
+      return get(userPath(request.auth.uid)).data;
+    }
+
+    function profileAfter() {
+      return getAfter(userPath(request.auth.uid)).data;
+    }
+
+    function isMember(hid) {
+      return isSignedIn() && request.auth.uid in get(householdPath(hid)).data.memberIds;
+    }
+
+    function isMemberAfter(hid) {
+      return isSignedIn() && request.auth.uid in getAfter(householdPath(hid)).data.memberIds;
+    }
+
+    function isOwner(hid) {
+      return isSignedIn() && get(householdPath(hid)).data.ownerId == request.auth.uid;
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Invite codes: three letters without I/O, a dash, four digits (src/domain/invite.ts).
+    function isInviteCode(code) {
+      return code is string && code.matches('^[A-HJ-NP-Z]{3}-[0-9]{4}$');
+    }
+
+    // A code expires 7 days after it was created (HH-03).
+    function inviteValidUntil(createdAt) {
+      return createdAt + duration.value(7, 'd');
+    }
+
+    function validDisplayName(value) {
+      return value is string && value.size() >= 1 && value.size() <= 50;
+    }
+
+    function validInitials(value) {
+      return value is string && value.size() >= 1 && value.size() <= 2;
+    }
+
+    function validAvatarColor(value) {
+      return value is int && value >= 1 && value <= 8;
+    }
+
     // users/{uid}: own profile only.
     match /users/{uid} {
-      function validDisplayName(data) {
-        return data.displayName is string
-          && data.displayName.size() >= 1 && data.displayName.size() <= 50;
-      }
-
-      function validInitials(data) {
-        return data.initials is string
-          && data.initials.size() >= 1 && data.initials.size() <= 2;
-      }
-
-      function validAvatarColor(data) {
-        return data.avatarColor is int
-          && data.avatarColor >= 1 && data.avatarColor <= 8;
-      }
-
       function validNewProfile() {
         let data = request.resource.data;
         return data.keys().hasOnly(
             ['displayName', 'email', 'initials', 'avatarColor', 'householdId', 'createdAt'])
           && data.keys().hasAll(
             ['displayName', 'email', 'initials', 'avatarColor', 'householdId', 'createdAt'])
-          && validDisplayName(data)
+          && validDisplayName(data.displayName)
           && data.email == request.auth.token.email
-          && validInitials(data)
-          && validAvatarColor(data)
+          && validInitials(data.initials)
+          && validAvatarColor(data.avatarColor)
           && data.householdId == null
           && data.createdAt == request.time;
       }
 
-      // householdId is changed by the Phase 2 rules (create / join / leave a household).
       function validProfileUpdate() {
         let data = request.resource.data;
-        return data.diff(resource.data).affectedKeys()
-            .hasOnly(['displayName', 'initials', 'avatarColor'])
-          && validDisplayName(data)
-          && validInitials(data)
-          && validAvatarColor(data);
+        return changedKeys().hasOnly(['displayName', 'initials', 'avatarColor'])
+          && validDisplayName(data.displayName)
+          && validInitials(data.initials)
+          && validAvatarColor(data.avatarColor);
+      }
+
+      // Creating or joining a household: null → hid, only together with the membership.
+      // Never from one household to another (one household per user).
+      function validHouseholdIdSet() {
+        let hid = request.resource.data.householdId;
+        return changedKeys().hasOnly(['householdId'])
+          && resource.data.householdId == null
+          && hid is string
+          && request.auth.uid in getAfter(householdPath(hid)).data.memberIds;
       }
 
       allow get: if isSelf(uid);
       allow create: if isSelf(uid) && validNewProfile();
-      allow update: if isSelf(uid) && validProfileUpdate();
+      allow update: if isSelf(uid) && (validProfileUpdate() || validHouseholdIdSet());
       allow list, delete: if false;
+    }
+
+    // households/{hid}: members read; owner changes settings and the code; a joiner adds
+    // only themself, proving they know the current, unexpired code.
+    match /households/{hid} {
+      function validName(value) {
+        return value is string && value.size() >= 1 && value.size() <= 50;
+      }
+
+      function validWeekStart(value) {
+        return value is int && value in [0, 1];
+      }
+
+      // Mirrors TIME_ZONES in src/domain/timeZones.ts (a rules test keeps them in sync).
+      function validTimeZone(value) {
+        return value in [
+          'Europe/Zurich', 'Europe/Berlin', 'Europe/Vienna', 'Europe/Rome', 'Europe/Paris',
+          'Europe/London', 'Europe/Lisbon', 'America/New_York', 'Asia/Tokyo'
+        ];
+      }
+
+      // Create batch: household + members/{uid} (owner) + invites/{code} + users/{uid}.
+      function validNewHousehold() {
+        let data = request.resource.data;
+        let uid = request.auth.uid;
+        let keys = ['name', 'ownerId', 'memberIds', 'weekStartsOn', 'timeZone', 'inviteCode',
+                    'inviteCreatedAt', 'createdAt', 'updatedAt'];
+        return data.keys().hasOnly(keys) && data.keys().hasAll(keys)
+          && data.ownerId == uid
+          && data.memberIds == [uid]
+          && validName(data.name)
+          && validWeekStart(data.weekStartsOn)
+          && validTimeZone(data.timeZone)
+          && isInviteCode(data.inviteCode)
+          && data.inviteCreatedAt == request.time
+          && data.createdAt == request.time
+          && data.updatedAt == request.time
+          && profile().householdId == null
+          && profileAfter().householdId == hid
+          && getAfter(memberPath(hid, uid)).data.role == 'owner'
+          && getAfter(invitePath(data.inviteCode)).data.householdId == hid;
+      }
+
+      function isSettingsUpdate() {
+        let data = request.resource.data;
+        return resource.data.ownerId == request.auth.uid
+          && changedKeys().hasOnly(['name', 'weekStartsOn', 'timeZone', 'updatedAt'])
+          && data.updatedAt == request.time
+          && validName(data.name)
+          && validWeekStart(data.weekStartsOn)
+          && validTimeZone(data.timeZone);
+      }
+
+      // New code batch: delete the old invite + create the new one + this update (HH-03).
+      function isNewCode() {
+        let data = request.resource.data;
+        return resource.data.ownerId == request.auth.uid
+          && changedKeys().hasOnly(['inviteCode', 'inviteCreatedAt', 'updatedAt'])
+          && isInviteCode(data.inviteCode)
+          && data.inviteCode != resource.data.inviteCode
+          && data.inviteCreatedAt == request.time
+          && data.updatedAt == request.time
+          && getAfter(invitePath(data.inviteCode)).data.householdId == hid
+          && !existsAfter(invitePath(resource.data.inviteCode));
+      }
+
+      // Join batch: memberIds arrayUnion(uid) + members/{uid} (joinedWithCode) +
+      // users/{uid}.householdId + invite memberCount + activity «member_joined».
+      function isJoin() {
+        let data = request.resource.data;
+        let uid = request.auth.uid;
+        return !(uid in resource.data.memberIds)
+          && data.memberIds == resource.data.memberIds.concat([uid])
+          && changedKeys().hasOnly(['memberIds', 'updatedAt'])
+          && data.updatedAt == request.time
+          && request.time < inviteValidUntil(resource.data.inviteCreatedAt)
+          && profile().householdId == null
+          && profileAfter().householdId == hid
+          && getAfter(memberPath(hid, uid)).data.joinedWithCode == resource.data.inviteCode;
+      }
+
+      allow get: if isSignedIn() && request.auth.uid in resource.data.memberIds;
+      allow list: if false;
+      allow create: if isSignedIn() && validNewHousehold();
+      allow update: if isSignedIn() && (isSettingsUpdate() || isNewCode() || isJoin());
+      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+
+      // members/{uid}: the member's profile, copied for display.
+      match /members/{uid} {
+        function matchesProfile(data) {
+          let p = profile();
+          return data.displayName == p.displayName
+            && data.initials == p.initials
+            && data.avatarColor == p.avatarColor;
+        }
+
+        // Inside the create batch, for the new owner.
+        function validOwnerMember() {
+          let data = request.resource.data;
+          let keys = ['displayName', 'initials', 'avatarColor', 'role', 'joinedAt'];
+          return !exists(householdPath(hid))
+            && getAfter(householdPath(hid)).data.ownerId == uid
+            && data.keys().hasOnly(keys) && data.keys().hasAll(keys)
+            && data.role == 'owner'
+            && matchesProfile(data)
+            && data.joinedAt == request.time;
+        }
+
+        // Inside the join batch, with the household's current code.
+        function validJoinerMember() {
+          let data = request.resource.data;
+          let before = get(householdPath(hid)).data;
+          let keys = ['displayName', 'initials', 'avatarColor', 'role', 'joinedAt',
+                      'joinedWithCode'];
+          return !(uid in before.memberIds)
+            && uid in getAfter(householdPath(hid)).data.memberIds
+            && data.keys().hasOnly(keys) && data.keys().hasAll(keys)
+            && data.role == 'member'
+            && data.joinedWithCode == before.inviteCode
+            && matchesProfile(data)
+            && data.joinedAt == request.time;
+        }
+
+        // Only together with the same change on the profile (memberService.updateMyProfile).
+        function validMemberUpdate() {
+          let data = request.resource.data;
+          let p = profileAfter();
+          return changedKeys().hasOnly(['displayName', 'initials', 'avatarColor'])
+            && data.displayName == p.displayName
+            && data.initials == p.initials
+            && data.avatarColor == p.avatarColor;
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isSelf(uid) && (validOwnerMember() || validJoinerMember());
+        allow update: if isSelf(uid) && validMemberUpdate();
+        allow delete: if false;
+      }
+
+      // activity/{id}: append-only (ACT-06).
+      match /activity/{activityId} {
+        function validNewActivity() {
+          let data = request.resource.data;
+          let uid = request.auth.uid;
+          return data.keys().hasOnly(['actorId', 'type', 'targetType', 'targetId',
+                                      'targetTitle', 'details', 'createdAt'])
+            && data.keys().hasAll(['actorId', 'type', 'targetType', 'targetId', 'targetTitle',
+                                   'createdAt'])
+            && data.actorId == uid
+            && data.createdAt == request.time
+            && data.type in ['member_joined']
+            && data.targetType is string
+            && data.targetId is string
+            && data.targetTitle is string
+            && (!('details' in data) || data.details is map)
+            && (isMember(hid)
+              // The joiner (not a member before the batch) records their own join.
+              || (data.type == 'member_joined'
+                && data.targetType == 'member'
+                && data.targetId == uid
+                && isMemberAfter(hid)));
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isSignedIn() && validNewActivity();
+        allow update, delete: if false;
+      }
+    }
+
+    // invites/{code}: lookup for the join flow. Anyone signed in may get a code (needed
+    // before joining), nobody may list them.
+    match /invites/{code} {
+      function validNewInvite() {
+        let data = request.resource.data;
+        let household = getAfter(householdPath(data.householdId)).data;
+        let keys = ['householdId', 'householdName', 'ownerName', 'memberCount', 'createdBy',
+                    'createdAt'];
+        return isInviteCode(code)
+          && data.keys().hasOnly(keys) && data.keys().hasAll(keys)
+          && data.householdId is string
+          && household.ownerId == request.auth.uid
+          && household.inviteCode == code
+          && data.householdName == household.name
+          && data.memberCount == household.memberIds.size()
+          && data.ownerName == profile().displayName
+          && data.createdBy == request.auth.uid
+          && data.createdAt == request.time;
+      }
+
+      // The preview stays current in the batches that change it. memberCount is checked
+      // relative to its old value, so a drifted count never blocks a join or profile edit.
+      function validInviteUpdate() {
+        let data = request.resource.data;
+        let hid = resource.data.householdId;
+        let keys = changedKeys();
+        return isMemberAfter(hid)
+          && keys.hasOnly(['householdName', 'ownerName', 'memberCount'])
+          && (!('householdName' in keys)
+            || data.householdName == getAfter(householdPath(hid)).data.name)
+          && (!('ownerName' in keys)
+            || (getAfter(householdPath(hid)).data.ownerId == request.auth.uid
+              && data.ownerName == profileAfter().displayName))
+          && (!('memberCount' in keys)
+            || (data.memberCount == resource.data.memberCount + 1
+              && !(request.auth.uid in get(householdPath(hid)).data.memberIds)));
+      }
+
+      allow get: if isSignedIn();
+      allow list: if false;
+      allow create: if isSignedIn() && validNewInvite();
+      allow update: if isSignedIn() && validInviteUpdate();
+      allow delete: if isOwner(resource.data.householdId);
     }
   }
 }

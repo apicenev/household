@@ -9,17 +9,22 @@ import { useAuth } from "../../lib/auth/useAuth";
 import { useCurrentMember } from "../../lib/auth/useCurrentMember";
 import { actions, areas } from "../../lib/copy";
 import { Avatar } from "../ui/Avatar";
-import { Menu, type MenuTriggerProps } from "../ui/Menu";
+import { Menu, type MenuEntry, type MenuTriggerProps } from "../ui/Menu";
 
-/** «Kontomenü»: Profil, Haushalt, Abmelden (UI-04). Shared by the top bar and the sidebar. */
+/**
+ * «Kontomenü»: Profil, Haushalt, Abmelden (UI-04). Shared by the top bar and the sidebar.
+ * `logoutOnly`: just «Abmelden», for onboarding, where there's no household yet (D6).
+ */
 export function AccountMenu({
   trigger,
   placement = "bottom",
   align = "end",
+  logoutOnly = false,
 }: {
   trigger: (props: MenuTriggerProps) => ReactNode;
   placement?: "bottom" | "top";
   align?: "start" | "end";
+  logoutOnly?: boolean;
 }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
@@ -42,9 +47,17 @@ export function AccountMenu({
         </div>
       }
       items={[
-        { label: "Profil", icon: UserCircleIcon, onSelect: () => navigate("/household#profil") },
-        { label: areas.household, icon: UsersIcon, onSelect: () => navigate("/household") },
-        "separator",
+        ...(logoutOnly
+          ? []
+          : ([
+              {
+                label: "Profil",
+                icon: UserCircleIcon,
+                onSelect: () => navigate("/household#profil"),
+              },
+              { label: areas.household, icon: UsersIcon, onSelect: () => navigate("/household") },
+              "separator",
+            ] satisfies MenuEntry[])),
         {
           label: actions.logout,
           icon: ArrowRightStartOnRectangleIcon,

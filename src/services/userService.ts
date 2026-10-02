@@ -47,15 +47,21 @@ export async function ensureUserProfile(
   });
 }
 
-/** Realtime profile; `onChange(null)` while the document doesn't exist yet. */
+/**
+ * Realtime profile; `onChange(null)` while the document doesn't exist yet. Also reports
+ * whether the snapshot contains local writes the server hasn't confirmed yet (e.g. the
+ * householdId of a pending create or join).
+ */
 export function listenToUserProfile(
   uid: string,
-  onChange: (profile: UserProfile | null) => void,
+  onChange: (profile: UserProfile | null, hasPendingWrites: boolean) => void,
   onError: (error: Error) => void,
 ): Unsubscribe {
   return onSnapshot(
     profileRef(uid).withConverter(userProfileConverter),
-    (snapshot) => onChange(snapshot.exists() ? snapshot.data() : null),
+    { includeMetadataChanges: true },
+    (snapshot) =>
+      onChange(snapshot.exists() ? snapshot.data() : null, snapshot.metadata.hasPendingWrites),
     onError,
   );
 }

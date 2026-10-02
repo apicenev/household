@@ -24,6 +24,11 @@ if (typeof HTMLDialogElement !== "undefined") {
   }
 }
 
+// jsdom doesn't lay out, so it has no scrollIntoView (the Haushalt page scrolls to #profil).
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = function scrollIntoView() {};
+}
+
 afterEach(() => {
   cleanup();
 });

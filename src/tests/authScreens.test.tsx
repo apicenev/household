@@ -8,6 +8,7 @@ function authValue(overrides: Partial<AuthContextValue> = {}): AuthContextValue 
   return {
     user: null,
     profile: null,
+    confirmedHouseholdId: undefined,
     initializing: false,
     login: vi.fn().mockResolvedValue(undefined),
     logout: vi.fn().mockResolvedValue(undefined),
