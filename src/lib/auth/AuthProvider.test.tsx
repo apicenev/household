@@ -46,19 +46,23 @@ vi.mock("../firebase", () => ({ auth: {}, db: {} }));
 const services = vi.hoisted(() => ({
   ensureUserProfile: vi.fn<() => Promise<void>>(),
   profileUnsubscribe: vi.fn(),
-  profileCallback: null as ((profile: UserProfile | null) => void) | null,
+  profileCallback: null as
+    ((profile: UserProfile | null, hasPendingWrites: boolean) => void) | null,
 }));
 
 vi.mock("../../services/userService", () => ({
   ensureUserProfile: services.ensureUserProfile,
-  listenToUserProfile: (_uid: string, onChange: (profile: UserProfile | null) => void) => {
+  listenToUserProfile: (
+    _uid: string,
+    onChange: (profile: UserProfile | null, hasPendingWrites: boolean) => void,
+  ) => {
     services.profileCallback = onChange;
     return services.profileUnsubscribe;
   },
 }));
 
 function Probe() {
-  const { user, profile, initializing, login, logout } = useAuth();
+  const { user, profile, confirmedHouseholdId, initializing, login, logout } = useAuth();
   return (
     <div>
       <output data-testid="state">
@@ -66,6 +70,7 @@ function Probe() {
           uid: user?.uid ?? null,
           initializing,
           name: profile?.displayName,
+          confirmed: confirmedHouseholdId === undefined ? "unknown" : confirmedHouseholdId,
         })}
       </output>
       <button onClick={() => void login("nevio@example.ch", "household-dev").catch(() => {})}>
@@ -118,14 +123,17 @@ describe("AuthProvider", () => {
     // Console-created accounts have no Auth display name; the service falls back to the email.
     expect(services.ensureUserProfile).toHaveBeenCalledWith(nevio, "");
     act(() =>
-      services.profileCallback?.({
-        uid: "nevio",
-        displayName: "Nevio",
-        email: nevio.email,
-        initials: "NE",
-        avatarColor: 3,
-        createdAt: new Date(),
-      }),
+      services.profileCallback?.(
+        {
+          uid: "nevio",
+          displayName: "Nevio",
+          email: nevio.email,
+          initials: "NE",
+          avatarColor: 3,
+          createdAt: new Date(),
+        },
+        false,
+      ),
     );
     expect(state().name).toBe("Nevio");
   });
@@ -157,6 +165,35 @@ describe("AuthProvider", () => {
     await act(async () => screen.getByText("logout").click());
     expect(services.profileUnsubscribe).toHaveBeenCalledTimes(1);
     expect(state()).toMatchObject({ uid: null, initializing: false });
+  });
+
+  it("exposes the household id only once the server has confirmed it", async () => {
+    fakeAuth.emit(restoredNevio);
+    renderProvider();
+    await waitFor(() => expect(state().uid).toBe("nevio"));
+    expect(state().confirmed).toBe("unknown");
+
+    const profile: UserProfile = {
+      uid: "nevio",
+      displayName: "Nevio",
+      email: nevio.email,
+      initials: "NE",
+      avatarColor: 3,
+      createdAt: new Date(),
+    };
+    act(() => services.profileCallback?.(profile, false));
+    expect(state().confirmed).toBeNull();
+
+    // Create pending: the local profile has the household, the server hasn't confirmed it.
+    act(() => services.profileCallback?.({ ...profile, householdId: "h1" }, true));
+    expect(state().confirmed).toBeNull();
+
+    act(() => services.profileCallback?.({ ...profile, householdId: "h1" }, false));
+    expect(state().confirmed).toBe("h1");
+
+    // Logout forgets it.
+    await act(async () => screen.getByText("logout").click());
+    expect(state().confirmed).toBe("unknown");
   });
 
   it("rejects login with the Firebase error and stays signed out", async () => {

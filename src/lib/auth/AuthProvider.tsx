@@ -3,15 +3,22 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ensureUserProfile, listenToUserProfile } from "../../services/userService";
 import type { UserProfile } from "../../types";
 import { auth } from "../firebase";
+import { nextConfirmedHouseholdId } from "./confirmedHouseholdId";
 import { AuthContext, type AuthContextValue, type AuthUser } from "./useAuth";
 
 interface AuthState {
   user: AuthUser | null;
   profile: UserProfile | null;
+  confirmedHouseholdId: string | null | undefined;
   initializing: boolean;
 }
 
-const signedOut: AuthState = { user: null, profile: null, initializing: false };
+const signedOut: AuthState = {
+  user: null,
+  profile: null,
+  confirmedHouseholdId: undefined,
+  initializing: false,
+};
 
 /** Firestore couldn't reach the backend (e.g. the app was opened without connection). */
 function isOffline(error: unknown): boolean {
@@ -53,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       const user: AuthUser = { uid: firebaseUser.uid, email: firebaseUser.email ?? "" };
-      setState({ user, profile: null, initializing: false });
+      setState({ user, profile: null, confirmedHouseholdId: undefined, initializing: false });
 
       // Not awaited: when offline, the write is queued and only resolves once synced.
       ensureUserProfile(user, firebaseUser.displayName ?? "").catch((error: unknown) => {
@@ -61,8 +68,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
       const unsubscribeProfile = listenToUserProfile(
         user.uid,
-        (profile) => {
-          if (generation === run.current) setState((current) => ({ ...current, profile }));
+        (profile, hasPendingWrites) => {
+          if (generation !== run.current) return;
+          setState((current) => ({
+            ...current,
+            profile,
+            confirmedHouseholdId: nextConfirmedHouseholdId(
+              current.confirmedHouseholdId,
+              profile,
+              hasPendingWrites,
+            ),
+          }));
         },
         (error) => console.error("Profil konnte nicht geladen werden", error),
       );
@@ -82,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     run.current += 1;
     stopListeners();
-    setState((current) => ({ ...current, profile: null }));
+    setState((current) => ({ ...current, profile: null, confirmedHouseholdId: undefined }));
     await signOut(auth);
   }, [stopListeners]);
 

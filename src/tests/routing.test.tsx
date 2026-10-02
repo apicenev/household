@@ -2,10 +2,19 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect, useState } from "react";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../components/ui/ToastProvider";
 import { AuthContext, type AuthContextValue, type AuthUser } from "../lib/auth/useAuth";
 import { AppRoutes } from "../router/AppRoutes";
+import { fakeStore, nevioProfile } from "./householdFakes";
+
+vi.mock("../lib/firebase", () => ({ auth: {}, db: {} }));
+vi.mock("../services/householdService", () =>
+  import("./householdFakes").then((fakes) => fakes.householdServiceMock),
+);
+vi.mock("../services/memberService", () =>
+  import("./householdFakes").then((fakes) => fakes.memberServiceMock),
+);
 
 const nevio: AuthUser = { uid: "nevio", email: "nevio@example.ch" };
 
@@ -24,15 +33,21 @@ function renderApp(path: string, initial: Partial<AuthContextValue> = {}) {
     const [auth, set] = useState<AuthContextValue>({
       user: null,
       profile: null,
+      confirmedHouseholdId: undefined,
       initializing: false,
       ...initial,
       login: async (email, password) => {
         login(email, password);
-        set((current) => ({ ...current, user: nevio }));
+        set((current) => ({ ...current, ...signedIn }));
       },
       logout: async () => {
         logout();
-        set((current) => ({ ...current, user: null, profile: null }));
+        set((current) => ({
+          ...current,
+          user: null,
+          profile: null,
+          confirmedHouseholdId: undefined,
+        }));
       },
     });
     useEffect(() => {
@@ -64,7 +79,33 @@ function LocationProbe() {
 }
 
 const currentPath = () => screen.getByTestId("location").textContent;
-const signedIn = { user: nevio };
+/** Member of «Musterstrasse 12» (h1). */
+const signedIn: Partial<AuthContextValue> = {
+  user: nevio,
+  profile: nevioProfile,
+  confirmedHouseholdId: "h1",
+};
+/** Signed in, no household yet. */
+const withoutHousehold: Partial<AuthContextValue> = {
+  user: nevio,
+  profile: { ...nevioProfile, householdId: undefined },
+  confirmedHouseholdId: null,
+};
+
+// Load the lazy pages once up front, so the first test doesn't wait on a cold import.
+beforeAll(async () => {
+  await Promise.all([
+    import("../pages/LoginPage"),
+    import("../pages/HouseholdPage"),
+    import("../pages/onboarding/OnboardingChoicePage"),
+    import("../pages/onboarding/CreateHouseholdPage"),
+    import("../pages/onboarding/JoinHouseholdPage"),
+  ]);
+});
+
+beforeEach(() => {
+  fakeStore.reset();
+});
 
 afterEach(() => {
   document.title = "";
@@ -132,6 +173,128 @@ describe("routing & guards", () => {
     await screen.findByRole("heading", { name: "Kalender", level: 1 });
     setAuth({ user: null });
     expect(await screen.findByRole("heading", { name: "Willkommen zurück" })).toBeInTheDocument();
+  });
+});
+
+describe("household guards (Phase 2)", () => {
+  it("sends users without a household to /onboarding (AUTH-06)", async () => {
+    renderApp("/dashboard", withoutHousehold);
+    expect(await screen.findByRole("heading", { name: "Hallo Nevio" })).toBeInTheDocument();
+    expect(currentPath()).toBe("/onboarding");
+    expect(screen.queryByRole("navigation", { name: "Hauptnavigation" })).not.toBeInTheDocument();
+    expect(fakeStore.subscribed).toEqual([]);
+  });
+
+  it("sends members away from /onboarding to /dashboard", async () => {
+    renderApp("/onboarding/join", signedIn);
+    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(currentPath()).toBe("/dashboard");
+  });
+
+  it("shows the app start while the profile loads", () => {
+    renderApp("/dashboard", { user: nevio });
+    expect(screen.getByRole("heading", { name: "Household" })).toBeInTheDocument();
+    expect(fakeStore.subscribed).toEqual([]);
+  });
+
+  it("reaches onboarding on a first login offline (pending profile, no household)", async () => {
+    // AuthProvider counts the pending null as confirmed (see confirmedHouseholdId.test.ts).
+    renderApp("/dashboard", withoutHousehold);
+    expect(await screen.findByRole("heading", { name: "Hallo Nevio" })).toBeInTheDocument();
+  });
+
+  it("keeps onboarding mounted while a create is pending, then moves on", async () => {
+    // The local profile already shows the new household; the server hasn't confirmed it.
+    const { setAuth } = renderApp("/onboarding/create", {
+      ...withoutHousehold,
+      profile: nevioProfile,
+    });
+    expect(await screen.findByRole("heading", { name: "Haushalt erstellen" })).toBeInTheDocument();
+    expect(fakeStore.subscribed).toEqual([]);
+
+    setAuth({ confirmedHouseholdId: "h1" });
+    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(currentPath()).toBe("/dashboard");
+    expect(fakeStore.subscribed).toEqual(["h1"]);
+  });
+
+  it("keeps the shell mounted during a pending profile edit", async () => {
+    const { setAuth } = renderApp("/household", signedIn);
+    await screen.findByRole("heading", { name: "Musterstrasse 12", level: 1 });
+    setAuth({ profile: { ...nevioProfile, displayName: "Nevio A." } });
+    expect(screen.getByRole("heading", { name: "Musterstrasse 12", level: 1 })).toBeInTheDocument();
+    expect(fakeStore.subscribed).toEqual(["h1"]);
+    expect(fakeStore.unsubscribed).toEqual([]);
+  });
+
+  it("shows the app start until household and members have loaded", async () => {
+    fakeStore.hold = true;
+    renderApp("/dashboard", signedIn);
+    expect(screen.getByRole("heading", { name: "Household" })).toBeInTheDocument();
+    act(() => fakeStore.emit());
+    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+  });
+
+  it("shows the error state inside the shell and subscribes again on retry (D8)", async () => {
+    fakeStore.error = Object.assign(new Error("denied"), { code: "permission-denied" });
+    const { logout } = renderApp("/tasks", signedIn);
+    expect(
+      await screen.findByRole("heading", { name: "Haushalt konnte nicht geladen werden" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Prüf deine Verbindung und versuch es nochmals.")).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Seitenleiste" })).toBeInTheDocument();
+
+    fakeStore.error = null;
+    await userEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByRole("heading", { name: "Aufgaben", level: 1 })).toBeInTheDocument();
+    expect(fakeStore.subscribed).toEqual(["h1", "h1"]);
+    expect(logout).not.toHaveBeenCalled();
+  });
+
+  it("logs out from the error state", async () => {
+    fakeStore.error = new Error("denied");
+    const { logout } = renderApp("/tasks", signedIn);
+    await userEvent.click(await screen.findByRole("button", { name: "Abmelden" }));
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("heading", { name: "Willkommen zurück" })).toBeInTheDocument();
+  });
+
+  it("treats a missing household as an error", async () => {
+    fakeStore.household = null;
+    renderApp("/dashboard", signedIn);
+    expect(
+      await screen.findByRole("heading", { name: "Haushalt konnte nicht geladen werden" }),
+    ).toBeInTheDocument();
+  });
+
+  it("tears down the listeners when the household changes", async () => {
+    const { setAuth } = renderApp("/dashboard", signedIn);
+    await screen.findByRole("heading", { name: "Start", level: 1 });
+    setAuth({ confirmedHouseholdId: "h2", profile: { ...nevioProfile, householdId: "h2" } });
+    await screen.findByRole("heading", { name: "Start", level: 1 });
+    expect(fakeStore.unsubscribed).toEqual(["h1"]);
+    expect(fakeStore.subscribed).toEqual(["h1", "h2"]);
+  });
+
+  it("sends signed-in users without a household from an unknown path to /onboarding", async () => {
+    renderApp("/gibts-nicht", withoutHousehold);
+    expect(await screen.findByRole("heading", { name: "Hallo Nevio" })).toBeInTheDocument();
+    expect(currentPath()).toBe("/onboarding");
+  });
+
+  it("shows the household name and role line in the sidebar", async () => {
+    renderApp("/dashboard", signedIn);
+    const sidebar = await screen.findByRole("complementary", { name: "Seitenleiste" });
+    expect(within(sidebar).getByText("Musterstrasse 12")).toBeInTheDocument();
+    expect(within(sidebar).getByText("Besitzer · 2 Mitglieder")).toBeInTheDocument();
+    expect(within(sidebar).queryByText("nevio@example.ch")).not.toBeInTheDocument();
+  });
+
+  it("shows «Mitglied» in the role line for members", async () => {
+    fakeStore.household = { ...fakeStore.household!, ownerId: "anna" };
+    renderApp("/dashboard", signedIn);
+    const sidebar = await screen.findByRole("complementary", { name: "Seitenleiste" });
+    expect(within(sidebar).getByText("Mitglied · 2 Mitglieder")).toBeInTheDocument();
   });
 });
 

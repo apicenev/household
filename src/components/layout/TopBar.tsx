@@ -17,6 +17,16 @@ export type TopBarProps =
       className?: string;
     }
   | {
+      /**
+       * Secondary area reached from the account menu (Haushalt): back button and the title
+       * left-aligned in the display font, no avatar (`Household.dc.html`).
+       */
+      variant: "back";
+      title: string;
+      onBack: () => void;
+      className?: string;
+    }
+  | {
       /** Detail screen: back button, centred title, optional action (e.g. «Bearbeiten»). */
       variant: "pushed";
       title: string;
@@ -31,7 +41,19 @@ export function TopBar(props: TopBarProps) {
     <header
       className={cx("sticky top-0 z-20 bg-canvas pt-[env(safe-area-inset-top)]", props.className)}
     >
-      {props.variant === "pushed" ? (
+      {props.variant === "back" ? (
+        <div className="flex h-14 items-center pr-2 pl-1">
+          <IconButton
+            aria-label={actions.back}
+            icon={ChevronLeftIcon}
+            variant="brand"
+            onClick={props.onBack}
+          />
+          <span className="truncate font-display text-[28px] leading-9 font-medium tracking-[-0.01em]">
+            {props.title}
+          </span>
+        </div>
+      ) : props.variant === "pushed" ? (
         <div className="grid h-14 grid-cols-[1fr_auto_1fr] items-center px-2">
           <IconButton
             aria-label={actions.back}

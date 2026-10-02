@@ -41,6 +41,8 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). Running it again keeps the household and replaces the code once it has expired.
+
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
 Seeded accounts (password `household-dev`):
@@ -77,6 +79,7 @@ To remove someone: disable or delete the account (an open session can stay valid
 | `npm run dev:emu`                 | Dev server against the local emulators                        |
 | `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data) |
 | `npm run seed`                    | Create the test accounts in the emulators                     |
+| `npm run seed -- --household`     | … plus «Musterstrasse 12» for Nevio; prints the invite code   |
 | `npm run build`                   | Type-check and build to `dist/`                               |
 | `npm run preview`                 | Serve the production build locally                            |
 | `npm run typecheck`               | TypeScript only                                               |
@@ -90,7 +93,26 @@ To remove someone: disable or delete the account (an open session can stay valid
 ## Testing
 
 - **Unit & component tests** (`src/tests/**`, jsdom): Firebase is mocked, nothing leaves the machine.
-- **Security rules tests** (`src/tests/rules/**`, Node): run against the Firestore emulator via `firebase emulators:exec`. Every collection gets rules tests in the same phase that introduces it.
+- **Security rules tests** (`src/tests/rules/**`, Node): run against the Firestore emulator via `firebase emulators:exec`. Every collection gets rules tests in the same phase that introduces it. `services.rules.test.ts` also runs the real services against the emulator, so their batches are checked by the real rules.
+
+## Data Model & Security
+
+All app data belongs to a **household**; a user belongs to at most one (`users/{uid}.householdId`).
+
+```text
+users/{uid}                          own profile: name, initials, avatar colour, householdId
+households/{hid}                     name, ownerId, memberIds[], weekStartsOn, timeZone, inviteCode, inviteCreatedAt
+households/{hid}/members/{uid}       profile copy for display, role (owner | member), joinedAt
+households/{hid}/activity/{id}       append-only log («member_joined», later tasks, shopping, events)
+invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
+```
+
+`firestore.rules` is the security boundary (details: `docs/requirements.md` §7):
+
+- Only members read a household and its subcollections; only the owner changes settings, creates a new code or deletes the household.
+- Joining requires the household's **current, unexpired** code (7 days after `inviteCreatedAt`, server time) and adds only the caller. Codes can be read one at a time by any signed-in user, never listed.
+- Multi-document writes (create, join, new code, profile edits) are single batches, and the rules cross-check the other documents of the batch with `getAfter()`, so an incomplete batch is rejected as a whole.
+- Activity entries are append-only; everything not matched is denied.
 
 ## Deployment
 
@@ -108,12 +130,12 @@ Vercel builds with `vercel.json` (Vite, `npm ci`, `npm run build`, `dist/`, SPA 
 src/
 ├── main.tsx · App.tsx · index.css   entry, root component, design tokens
 ├── router/        routes and guards
-├── lib/           firebase.ts, auth/ (provider, profile), format.ts (de-CH), copy.ts, converters
+├── lib/           firebase.ts, auth/ (provider, profile), household/ (realtime provider), format.ts (de-CH), copy.ts, converters
 ├── services/      all Firestore I/O, one module per entity
 ├── domain/        pure business logic (no Firebase, no React — enforced by ESLint)
 ├── types/         shared domain types
 ├── pages/         one component per route
-├── hooks/         small shared hooks (online status, document title)
+├── hooks/         small shared hooks (online status, document title, media query)
 ├── components/    layout/ (shell, auth layout), ui/ (design-system primitives), feature folders
 └── tests/         unit/component tests + rules/ (emulator)
 scripts/           seed-emulator.ts (emulator only)
@@ -124,3 +146,4 @@ docs/design/       design system: tokens, components, screens (local, not in git
 
 - If PowerShell blocks `npm`/`npx` ("running scripts is disabled"), run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 - The Firestore emulator uses port **8180** (8080 is commonly taken by other local services).
+- After `npm run test:rules` the emulator's Java process can keep running, and the next run fails with «port taken». Stop it with `Get-NetTCPConnection -LocalPort 8180 -State Listen | % { Stop-Process -Id $_.OwningProcess }`.

@@ -18,6 +18,8 @@ export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement
   /** Leading element for the selected value, e.g. a 28 px avatar. */
   leading?: ReactNode;
   className?: string;
+  /** Extra classes for the select itself, e.g. a smaller desktop height. */
+  selectClassName?: string;
 }
 
 /** Native select (reliable on phones) styled as a field, with an optional leading slot. */
@@ -30,6 +32,7 @@ export function Select({
   leading,
   disabled,
   className,
+  selectClassName,
   id,
   ...rest
 }: SelectProps) {
@@ -63,6 +66,7 @@ export function Select({
             controlClasses({ error: Boolean(error), disabled }),
             "h-12 cursor-pointer appearance-none pr-10 disabled:cursor-not-allowed",
             leading ? "pl-12" : "pl-3.5",
+            selectClassName,
           )}
           {...rest}
         >

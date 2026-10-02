@@ -22,3 +22,6 @@ export function avatarColorFor(uid: string): AvatarColor {
   }
   return ((hash % 8) + 1) as AvatarColor;
 }
+
+/** Trimmed display name, or why it isn't valid: same rules as household names (1–50). */
+export { validateHouseholdName as validateDisplayName } from "./household";

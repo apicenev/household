@@ -6,9 +6,13 @@ export type { AvatarColor };
 
 /**
  * Diameter in px. The sheet names sm 24 / md 32 / lg 48 / xl 72; 28 (rows, chips, selects),
- * 34 (top bar) and 36 (menu, sidebar, activity) are used by the screens.
+ * 34 (top bar), 36 (menu, sidebar, activity), 40 (member rows), 56 (onboarding, desktop
+ * profile) and 64 (mobile profile) are used by the screens.
  */
-export type AvatarSize = 24 | 28 | 32 | 34 | 36 | 48 | 72;
+export type AvatarSize = 24 | 28 | 32 | 34 | 36 | 40 | 48 | 56 | 64 | 72;
+
+/** sans: initials in the UI font · display: Newsreader (profile avatars). */
+export type AvatarTypeface = "sans" | "display";
 
 const colors: Record<AvatarColor, string> = {
   1: "bg-avatar-1 text-avatar-1-ink",
@@ -27,21 +31,38 @@ const sizes: Record<AvatarSize, string> = {
   32: "size-8 text-caption font-[650]",
   34: "size-8.5 text-[13px] font-[650]",
   36: "size-9 text-[13px] font-[650] tracking-[0.02em]",
+  40: "size-10 text-[14px] font-[650]",
   48: "size-12 text-[17px] font-[650]",
+  56: "size-14 text-[20px] font-[650]",
+  64: "size-16 font-display text-[24px] font-semibold",
   72: "size-18 font-display text-[26px] font-semibold",
+};
+
+/** Sizes that exist in both typefaces (56: sans on onboarding, display in the profile). */
+const displaySizes: Partial<Record<AvatarSize, string>> = {
+  56: "size-14 font-display text-[21px] font-semibold",
 };
 
 export interface AvatarProps {
   initials: string;
   color: AvatarColor;
   size?: AvatarSize;
+  /** Only changes sizes designed in both typefaces (56); the others have a fixed one. */
+  typeface?: AvatarTypeface;
   /** Accessible name (the member's name). Omit when the name is shown next to the avatar. */
   name?: string;
   className?: string;
 }
 
 /** Initials on the member's avatar colour. */
-export function Avatar({ initials, color, size = 32, name, className }: AvatarProps) {
+export function Avatar({
+  initials,
+  color,
+  size = 32,
+  typeface = "sans",
+  name,
+  className,
+}: AvatarProps) {
   return (
     <span
       role={name ? "img" : undefined}
@@ -50,7 +71,7 @@ export function Avatar({ initials, color, size = 32, name, className }: AvatarPr
       className={cx(
         "inline-flex shrink-0 items-center justify-center rounded-pill leading-none select-none",
         colors[color],
-        sizes[size],
+        (typeface === "display" && displaySizes[size]) || sizes[size],
         className,
       )}
     >
