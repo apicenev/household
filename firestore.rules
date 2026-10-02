@@ -2,22 +2,75 @@ rules_version = '2';
 
 // Household — Firestore security rules.
 //
-// Phase 0 baseline: deny everything. Each phase opens exactly the paths it needs,
-// together with emulator tests in src/tests/rules/.
+// Private app: accounts are created by the admin in the Firebase console and self sign-up is
+// disabled there (AUTH-08), so every rule starts with isSignedIn(). Anything not matched
+// below is denied.
 //
-// Planned structure:
-//   users/{uid}                        own profile only              (Phase 1)
-//   households/{hid}                   members read, owner updates   (Phase 2)
-//   households/{hid}/members|tasks|shoppingItems|itemStats|events    (Phases 2–7)
-//   households/{hid}/activity          members create, append-only   (Phase 2)
-//   invites/{code}                     get by signed-in users        (Phase 2)
+// Structure:
+//   users/{uid}                        own profile only                       (Phase 1)
+//   households/{hid}                   members read, owner updates            (Phase 2)
+//   households/{hid}/members|tasks|shoppingItems|itemStats|events             (Phases 2–7)
+//   households/{hid}/activity          members create, append-only            (Phase 2)
+//   invites/{code}                     get by signed-in users                 (Phase 2)
 //
-// Helpers to add: isSignedIn(), isMember(hid), isOwner(hid), field validators.
+// Emulator tests: src/tests/rules/.
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    // users/{uid}: own profile only.
+    match /users/{uid} {
+      function validDisplayName(data) {
+        return data.displayName is string
+          && data.displayName.size() >= 1 && data.displayName.size() <= 50;
+      }
+
+      function validInitials(data) {
+        return data.initials is string
+          && data.initials.size() >= 1 && data.initials.size() <= 2;
+      }
+
+      function validAvatarColor(data) {
+        return data.avatarColor is int
+          && data.avatarColor >= 1 && data.avatarColor <= 8;
+      }
+
+      function validNewProfile() {
+        let data = request.resource.data;
+        return data.keys().hasOnly(
+            ['displayName', 'email', 'initials', 'avatarColor', 'householdId', 'createdAt'])
+          && data.keys().hasAll(
+            ['displayName', 'email', 'initials', 'avatarColor', 'householdId', 'createdAt'])
+          && validDisplayName(data)
+          && data.email == request.auth.token.email
+          && validInitials(data)
+          && validAvatarColor(data)
+          && data.householdId == null
+          && data.createdAt == request.time;
+      }
+
+      // householdId is changed by the Phase 2 rules (create / join / leave a household).
+      function validProfileUpdate() {
+        let data = request.resource.data;
+        return data.diff(resource.data).affectedKeys()
+            .hasOnly(['displayName', 'initials', 'avatarColor'])
+          && validDisplayName(data)
+          && validInitials(data)
+          && validAvatarColor(data);
+      }
+
+      allow get: if isSelf(uid);
+      allow create: if isSelf(uid) && validNewProfile();
+      allow update: if isSelf(uid) && validProfileUpdate();
+      allow list, delete: if false;
     }
   }
 }

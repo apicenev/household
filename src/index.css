@@ -2,100 +2,372 @@
 
 /*
  * Household design tokens (Tailwind v4, CSS-first).
- * Contrast (WCAG AA): ink / ink-muted / ink-subtle pass 4.5:1 on surface, canvas and sunken;
- * white passes 4.5:1 on brand, success, danger and every avatar colour;
- * warning passes 4.5:1 as text on surface; control passes 3:1 as a UI border.
+ * Source of truth: docs/design/household-tokens.css. Names map 1:1 to Tailwind namespaces,
+ * so utilities follow directly: bg-canvas, text-ink, rounded-card, shadow-card, text-heading …
+ * Keep this file in sync with the design export; components use tokens only.
  */
-@theme {
-  /* Surfaces & text */
-  --color-canvas: #faf7f2;
-  --color-surface: #ffffff;
-  --color-sunken: #f3eee6;
-  --color-ink: #1f2a27;
-  --color-ink-muted: #4f5a56;
-  --color-ink-subtle: #626b67;
-  --color-line: #e6dfd4;
-  --color-line-strong: #cfc6b8;
-  --color-control: #858c88;
 
-  /* Brand & semantic */
-  --color-brand: #2f6f5e;
-  --color-brand-hover: #275d4f;
-  --color-brand-soft: #e3efe9;
-  --color-brand-strong: #1f4d41;
-  --color-brand-ink: #ffffff;
-  --color-success: #2e7d4f;
-  --color-success-soft: #e4f3ea;
-  --color-warning: #8f5b00;
-  --color-warning-soft: #fdf1dc;
-  --color-danger: #b42318;
-  --color-danger-soft: #fdecea;
+@custom-variant dark (&:where(.dark, .dark *));
 
-  /* Task priority */
-  --color-priority-low: #5b6b7a;
-  --color-priority-medium: #b7791f;
-  --color-priority-high: #c2410c;
-
-  /* Event categories */
-  --color-cat-social: #c2410c;
-  --color-cat-appointment: #2563eb;
-  --color-cat-travel: #0f766e;
-  --color-cat-home: #2f6f5e;
-  --color-cat-reminder: #a16207;
-  --color-cat-other: #6b7280;
-
-  /* Shopping categories */
-  --color-cat-groceries: #3f7d3a;
-  --color-cat-household: #2563eb;
-  --color-cat-pharmacy: #be185d;
-  --color-cat-shopping-other: #6b7280;
-
-  /* Member avatars (white initials on top) */
-  --color-avatar-1: #2f6f5e;
-  --color-avatar-2: #b45309;
-  --color-avatar-3: #1d4ed8;
-  --color-avatar-4: #be185d;
-  --color-avatar-5: #6d28d9;
-  --color-avatar-6: #0f766e;
-  --color-avatar-7: #b91c1c;
-  --color-avatar-8: #4d5b6a;
-
-  /* Typography: system stack, no web font download */
-  --font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial,
-    "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
-
-  /* Radii */
-  --radius-control: 0.625rem;
-  --radius-card: 1rem;
-  --radius-sheet: 1.5rem;
-  --radius-pill: 9999px;
-
-  /* Shadows */
-  --shadow-card: 0 1px 2px rgb(31 42 39 / 0.06), 0 1px 3px rgb(31 42 39 / 0.08);
-  --shadow-raised: 0 4px 12px rgb(31 42 39 / 0.1), 0 2px 4px rgb(31 42 39 / 0.06);
-  --shadow-sheet: 0 -8px 24px rgb(31 42 39 / 0.12);
-
-  /* Motion */
-  --default-transition-duration: 180ms;
-  --default-transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+/*
+ * Interaction states for components. Each also matches data-state="hover|pressed|focus",
+ * so /dev/ui can freeze a state for side-by-side comparison with the component sheet.
+ */
+@custom-variant hovered {
+  @media (hover: hover) {
+    &:hover:not(:disabled, [aria-disabled="true"]) {
+      @slot;
+    }
+  }
+  &[data-state~="hover"] {
+    @slot;
+  }
+}
+@custom-variant pressed {
+  &:active:not(:disabled, [aria-disabled="true"]) {
+    @slot;
+  }
+  &[data-state~="pressed"] {
+    @slot;
+  }
+}
+@custom-variant focused {
+  &:focus-visible {
+    @slot;
+  }
+  &[data-state~="focus"] {
+    @slot;
+  }
 }
 
+@theme static {
+  /* Only Household colours: removes Tailwind's default palette (incl. white/black). */
+  --color-*: initial;
+
+  --font-display: "Newsreader Variable", ui-serif, Georgia, "Times New Roman", serif;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, "Helvetica Neue",
+    Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Surfaces & text */
+  --color-canvas: oklch(0.972 0.009 80);
+  --color-surface: oklch(0.995 0.004 85);
+  --color-sunken: oklch(0.948 0.011 80);
+  --color-ink: oklch(0.25 0.018 60);
+  --color-ink-muted: oklch(0.44 0.016 60);
+  --color-ink-subtle: oklch(0.52 0.014 65);
+  --color-line: oklch(0.91 0.011 78);
+  --color-line-strong: oklch(0.85 0.013 75);
+  --color-control: oklch(0.63 0.016 70);
+  --color-scrim: oklch(0.2 0.02 60 / 0.4);
+  --color-focus: oklch(0.47 0.085 148);
+
+  /* Brand — moss */
+  --color-brand: oklch(0.47 0.085 148);
+  --color-brand-hover: oklch(0.41 0.08 148);
+  --color-brand-soft: oklch(0.935 0.035 145);
+  --color-brand-strong: oklch(0.36 0.07 148);
+  --color-on-brand: oklch(0.99 0.005 90);
+
+  /* Status */
+  --color-success: oklch(0.48 0.1 155);
+  --color-success-soft: oklch(0.94 0.035 155);
+  --color-warning: oklch(0.5 0.1 70);
+  --color-warning-soft: oklch(0.95 0.045 85);
+  --color-danger: oklch(0.51 0.16 29);
+  --color-danger-hover: oklch(0.45 0.15 29);
+  --color-danger-soft: oklch(0.95 0.025 29);
+
+  /* Priority */
+  --color-priority-high: oklch(0.51 0.16 29);
+  --color-priority-medium: oklch(0.52 0.11 65);
+  --color-priority-low: oklch(0.52 0.05 245);
+
+  /* Event categories — dot/icon, soft bg, ink on soft */
+  --color-event-social: oklch(0.52 0.13 355);
+  --color-event-social-soft: oklch(0.945 0.03 355);
+  --color-event-social-ink: oklch(0.42 0.12 355);
+  --color-event-appointment: oklch(0.52 0.13 255);
+  --color-event-appointment-soft: oklch(0.945 0.03 255);
+  --color-event-appointment-ink: oklch(0.42 0.12 255);
+  --color-event-travel: oklch(0.52 0.1 205);
+  --color-event-travel-soft: oklch(0.945 0.03 205);
+  --color-event-travel-ink: oklch(0.42 0.08 205);
+  --color-event-home: oklch(0.52 0.11 145);
+  --color-event-home-soft: oklch(0.945 0.035 145);
+  --color-event-home-ink: oklch(0.42 0.09 145);
+  --color-event-reminder: oklch(0.54 0.11 75);
+  --color-event-reminder-soft: oklch(0.95 0.045 85);
+  --color-event-reminder-ink: oklch(0.43 0.09 70);
+  --color-event-other: oklch(0.52 0.12 305);
+  --color-event-other-soft: oklch(0.945 0.03 305);
+  --color-event-other-ink: oklch(0.42 0.11 305);
+
+  /* Shopping categories */
+  --color-shop-groceries: oklch(0.52 0.11 140);
+  --color-shop-groceries-soft: oklch(0.945 0.035 140);
+  --color-shop-groceries-ink: oklch(0.42 0.09 140);
+  --color-shop-household: oklch(0.52 0.11 240);
+  --color-shop-household-soft: oklch(0.945 0.03 240);
+  --color-shop-household-ink: oklch(0.42 0.1 240);
+  --color-shop-pharmacy: oklch(0.52 0.14 15);
+  --color-shop-pharmacy-soft: oklch(0.945 0.03 15);
+  --color-shop-pharmacy-ink: oklch(0.42 0.12 15);
+  --color-shop-other: oklch(0.52 0.02 70);
+  --color-shop-other-soft: oklch(0.945 0.01 70);
+  --color-shop-other-ink: oklch(0.42 0.02 70);
+
+  /* Member avatars — bg + initials */
+  --color-avatar-1: oklch(0.87 0.07 40);
+  --color-avatar-1-ink: oklch(0.34 0.09 40);
+  --color-avatar-2: oklch(0.88 0.08 80);
+  --color-avatar-2-ink: oklch(0.35 0.07 70);
+  --color-avatar-3: oklch(0.88 0.07 115);
+  --color-avatar-3-ink: oklch(0.34 0.07 115);
+  --color-avatar-4: oklch(0.87 0.06 150);
+  --color-avatar-4-ink: oklch(0.33 0.07 150);
+  --color-avatar-5: oklch(0.87 0.05 195);
+  --color-avatar-5-ink: oklch(0.33 0.06 200);
+  --color-avatar-6: oklch(0.86 0.05 240);
+  --color-avatar-6-ink: oklch(0.33 0.08 245);
+  --color-avatar-7: oklch(0.86 0.05 285);
+  --color-avatar-7-ink: oklch(0.34 0.1 285);
+  --color-avatar-8: oklch(0.87 0.05 350);
+  --color-avatar-8-ink: oklch(0.35 0.1 350);
+
+  /* Type scale (size / line-height / weight / letter-spacing) */
+  --text-display: 2.125rem;
+  --text-display--line-height: 2.5rem;
+  --text-display--font-weight: 500;
+  --text-display--letter-spacing: -0.015em;
+  --text-title: 1.625rem;
+  --text-title--line-height: 2rem;
+  --text-title--font-weight: 500;
+  --text-title--letter-spacing: -0.01em;
+  --text-heading: 1.0625rem;
+  --text-heading--line-height: 1.5rem;
+  --text-heading--font-weight: 600;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-body-sm: 0.875rem;
+  --text-body-sm--line-height: 1.25rem;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1rem;
+  --text-caption--font-weight: 500;
+  --text-caption--letter-spacing: 0.01em;
+
+  /* Spacing (4px base: p-1 = 4px, p-4 = 16px) */
+  --spacing: 0.25rem;
+
+  /* Radii */
+  --radius-xs: 6px;
+  --radius-control: 12px;
+  --radius-card: 18px;
+  --radius-sheet: 28px;
+  --radius-pill: 9999px;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px oklch(0.3 0.03 60 / 0.06), 0 0 0 1px oklch(0.3 0.03 60 / 0.05);
+  --shadow-raised:
+    0 10px 28px -10px oklch(0.3 0.03 60 / 0.22), 0 2px 6px -2px oklch(0.3 0.03 60 / 0.08);
+  --shadow-sheet: 0 -16px 48px -16px oklch(0.25 0.03 60 / 0.3);
+  --shadow-bar: 0 -1px 0 oklch(0.3 0.03 60 / 0.07), 0 -10px 28px -18px oklch(0.3 0.03 60 / 0.25);
+
+  /* Toast accents on the dark ink toast, literal values from Components.dc.html */
+  --color-toast-success: oklch(0.8 0.1 148);
+  --color-toast-danger: oklch(0.75 0.13 29);
+  --color-toast-action: oklch(0.87 0.07 145);
+
+  /* Component-level shadows, literal values from Components.dc.html (not in the token file) */
+  --shadow-pressed: inset 0 2px 3px oklch(0 0 0 / 0.18);
+  --shadow-pressed-danger: inset 0 2px 3px oklch(0 0 0 / 0.2);
+  --shadow-knob: 0 2px 4px oklch(0 0 0 / 0.2);
+
+  /* Easing */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  /* Default for transition-* utilities */
+  --default-transition-duration: 160ms;
+  --default-transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Keyframes used by components (spinner, skeleton) */
+  --animate-spinner: hh-spin 0.8s linear infinite;
+  --animate-skeleton: hh-pulse 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  /* App-start screen: invisible for 300 ms, then fades in over duration-base */
+  --animate-delayed-fade-in: hh-fade-in 240ms cubic-bezier(0.22, 1, 0.36, 1) 300ms both;
+
+  @keyframes hh-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes hh-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @keyframes hh-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+}
+
+/*
+ * Tokens outside Tailwind's namespaces: plain custom properties, used as
+ * duration-(--duration-fast), h-(--tabbar-height), min-h-(--touch-min) …
+ */
 @layer base {
   :root {
     color-scheme: light;
-  }
 
+    --duration-instant: 100ms;
+    --duration-fast: 160ms;
+    --duration-base: 240ms;
+    --duration-slow: 360ms;
+
+    --tabbar-height: 64px;
+    --touch-min: 44px;
+  }
+}
+
+/*
+ * Dark mode — same names, new values. Copied verbatim from the design, but not activated:
+ * nothing sets .dark yet (UI-11, later).
+ */
+.dark,
+[data-theme="dark"] {
+  color-scheme: dark;
+  --color-canvas: oklch(0.185 0.008 70);
+  --color-surface: oklch(0.225 0.009 70);
+  --color-sunken: oklch(0.16 0.007 70);
+  --color-ink: oklch(0.95 0.008 80);
+  --color-ink-muted: oklch(0.8 0.01 80);
+  --color-ink-subtle: oklch(0.68 0.01 75);
+  --color-line: oklch(0.29 0.009 70);
+  --color-line-strong: oklch(0.37 0.01 70);
+  --color-control: oklch(0.56 0.012 70);
+  --color-scrim: oklch(0.05 0.01 60 / 0.6);
+  --color-focus: oklch(0.74 0.1 148);
+
+  --color-brand: oklch(0.74 0.1 148);
+  --color-brand-hover: oklch(0.8 0.1 148);
+  --color-brand-soft: oklch(0.3 0.045 148);
+  --color-brand-strong: oklch(0.87 0.07 145);
+  --color-on-brand: oklch(0.2 0.03 148);
+
+  --color-success: oklch(0.76 0.11 155);
+  --color-success-soft: oklch(0.29 0.045 155);
+  --color-warning: oklch(0.8 0.11 80);
+  --color-warning-soft: oklch(0.3 0.05 75);
+  --color-danger: oklch(0.73 0.14 29);
+  --color-danger-hover: oklch(0.78 0.13 29);
+  --color-danger-soft: oklch(0.3 0.06 29);
+
+  --color-priority-high: oklch(0.73 0.14 29);
+  --color-priority-medium: oklch(0.78 0.11 70);
+  --color-priority-low: oklch(0.74 0.06 245);
+
+  --color-event-social: oklch(0.74 0.12 355);
+  --color-event-social-soft: oklch(0.31 0.05 355);
+  --color-event-social-ink: oklch(0.89 0.05 355);
+  --color-event-appointment: oklch(0.74 0.11 255);
+  --color-event-appointment-soft: oklch(0.31 0.05 255);
+  --color-event-appointment-ink: oklch(0.89 0.05 255);
+  --color-event-travel: oklch(0.76 0.09 205);
+  --color-event-travel-soft: oklch(0.31 0.04 205);
+  --color-event-travel-ink: oklch(0.9 0.04 205);
+  --color-event-home: oklch(0.76 0.1 145);
+  --color-event-home-soft: oklch(0.31 0.045 145);
+  --color-event-home-ink: oklch(0.9 0.05 145);
+  --color-event-reminder: oklch(0.8 0.11 80);
+  --color-event-reminder-soft: oklch(0.31 0.05 75);
+  --color-event-reminder-ink: oklch(0.91 0.06 85);
+  --color-event-other: oklch(0.75 0.11 305);
+  --color-event-other-soft: oklch(0.31 0.05 305);
+  --color-event-other-ink: oklch(0.89 0.05 305);
+
+  --color-shop-groceries: oklch(0.76 0.1 140);
+  --color-shop-groceries-soft: oklch(0.31 0.045 140);
+  --color-shop-groceries-ink: oklch(0.9 0.05 140);
+  --color-shop-household: oklch(0.75 0.1 240);
+  --color-shop-household-soft: oklch(0.31 0.05 240);
+  --color-shop-household-ink: oklch(0.89 0.05 240);
+  --color-shop-pharmacy: oklch(0.74 0.12 15);
+  --color-shop-pharmacy-soft: oklch(0.31 0.05 15);
+  --color-shop-pharmacy-ink: oklch(0.89 0.05 15);
+  --color-shop-other: oklch(0.72 0.02 70);
+  --color-shop-other-soft: oklch(0.31 0.01 70);
+  --color-shop-other-ink: oklch(0.9 0.01 70);
+
+  --color-avatar-1: oklch(0.42 0.08 40);
+  --color-avatar-1-ink: oklch(0.94 0.04 40);
+  --color-avatar-2: oklch(0.43 0.07 75);
+  --color-avatar-2-ink: oklch(0.95 0.05 85);
+  --color-avatar-3: oklch(0.42 0.07 115);
+  --color-avatar-3-ink: oklch(0.95 0.05 115);
+  --color-avatar-4: oklch(0.42 0.07 150);
+  --color-avatar-4-ink: oklch(0.94 0.04 150);
+  --color-avatar-5: oklch(0.42 0.06 200);
+  --color-avatar-5-ink: oklch(0.94 0.03 195);
+  --color-avatar-6: oklch(0.42 0.08 245);
+  --color-avatar-6-ink: oklch(0.94 0.03 240);
+  --color-avatar-7: oklch(0.42 0.09 285);
+  --color-avatar-7-ink: oklch(0.94 0.03 285);
+  --color-avatar-8: oklch(0.42 0.09 350);
+  --color-avatar-8-ink: oklch(0.94 0.03 350);
+
+  --shadow-card: 0 0 0 1px oklch(1 0 0 / 0.06);
+  --shadow-raised: 0 10px 28px -10px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.06);
+  --shadow-sheet: 0 -16px 48px -16px oklch(0 0 0 / 0.7);
+  --shadow-bar: 0 -1px 0 oklch(1 0 0 / 0.07);
+}
+
+@layer base {
   body {
     @apply bg-canvas font-sans text-ink antialiased;
     -webkit-tap-highlight-color: transparent;
   }
 
-  :focus-visible {
-    @apply outline-2 outline-offset-2 outline-brand;
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  /* Never below 16 px, so iOS Safari doesn't zoom into focused fields. */
+  input,
+  select,
+  textarea {
+    font-size: max(1rem, 1em);
+  }
+
+  :focus-visible,
+  [data-state~="focus"] {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
   }
 
   @media (prefers-reduced-motion: reduce) {
+    :root {
+      --duration-fast: 0ms;
+      --duration-base: 0ms;
+      --duration-slow: 0ms;
+      --ease-spring: linear;
+    }
+
     *,
     *::before,
     *::after {
@@ -108,19 +380,62 @@
 }
 
 @layer components {
-  .card {
-    @apply rounded-card border border-line bg-surface p-6 shadow-card;
+  /*
+   * Sheet / dialog motion (native <dialog>). Below lg: slides up from the bottom
+   * (duration-slow, as in Foundations «Sheet einblenden»). From lg: fades and scales in.
+   * Exit transitions need `overlay` + allow-discrete; browsers without it close instantly.
+   */
+  .hh-sheet {
+    translate: 0 100%;
+    transition-property: translate, opacity, scale, overlay, display;
+    transition-duration: var(--duration-slow);
+    transition-timing-function: var(--ease-out);
+    transition-behavior: allow-discrete;
+  }
+  .hh-sheet[open] {
+    translate: 0 0;
+  }
+  @starting-style {
+    .hh-sheet[open] {
+      translate: 0 100%;
+    }
   }
 
-  .btn {
-    @apply inline-flex min-h-11 items-center justify-center gap-2 rounded-control px-4 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60;
+  .hh-sheet::backdrop {
+    background: var(--color-scrim);
+    opacity: 0;
+    transition-property: opacity, overlay, display;
+    transition-duration: var(--duration-base);
+    transition-timing-function: var(--ease-out);
+    transition-behavior: allow-discrete;
+  }
+  .hh-sheet[open]::backdrop {
+    opacity: 1;
+  }
+  @starting-style {
+    .hh-sheet[open]::backdrop {
+      opacity: 0;
+    }
   }
 
-  .btn-primary {
-    @apply bg-brand text-brand-ink hover:bg-brand-hover;
-  }
-
-  .badge {
-    @apply inline-flex items-center rounded-pill bg-brand-soft px-3 py-1 text-xs font-medium text-brand-strong;
+  @media (width >= 64rem) {
+    .hh-sheet {
+      translate: none;
+      opacity: 0;
+      scale: 0.97;
+      transition-duration: var(--duration-base);
+    }
+    .hh-sheet[open] {
+      translate: none;
+      opacity: 1;
+      scale: 1;
+    }
+    @starting-style {
+      .hh-sheet[open] {
+        translate: none;
+        opacity: 0;
+        scale: 0.97;
+      }
+    }
   }
 }
