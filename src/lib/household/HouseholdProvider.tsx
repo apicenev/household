@@ -2,8 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { isOwner, sortMembers } from "../../domain/household";
 import { listenToHousehold } from "../../services/householdService";
 import { listenToMembers } from "../../services/memberService";
+import { listenToItems, listenToItemStats } from "../../services/shoppingService";
 import { listenToTasks } from "../../services/taskService";
-import type { Household, Member, Task } from "../../types";
+import type { Household, ItemStat, Member, ShoppingItem, Task } from "../../types";
 import { HouseholdContext, type HouseholdContextValue } from "./useHousehold";
 
 interface Snapshot {
@@ -30,12 +31,22 @@ interface TasksSnapshot {
 
 const initialTasks: TasksSnapshot = { tasks: [], loaded: false, error: null };
 
+interface ItemsSnapshot {
+  items: ShoppingItem[];
+  loaded: boolean;
+  error: Error | null;
+}
+
+const initialItems: ItemsSnapshot = { items: [], loaded: false, error: null };
+
 /**
- * Realtime store of one household (NFR-03): the household document, its members and tasks.
+ * Realtime store of one household (NFR-03): the household document, its members, tasks and
+ * shopping list (with the purchase history).
  * Mount it with `key={householdId}`, so a change of household tears down all listeners.
  * `loading` (which gates the shell) waits only for household and members; the task list has
- * its own loading and error state, so it never blocks the shell (Phase 3 D13, D14). Later
- * phases add shopping, events and activity here.
+ * its own loading and error state, so it never blocks the shell (Phase 3 D13, D14); so has the
+ * shopping list (Phase 5 D38, D39). A failing itemStats listener only means no suggestions,
+ * so its error is ignored. Later phases add events and activity here.
  */
 export function HouseholdProvider({
   householdId,
@@ -50,6 +61,9 @@ export function HouseholdProvider({
   const [attempt, setAttempt] = useState(0);
   const [tasksSnapshot, setTasksSnapshot] = useState<TasksSnapshot>(initialTasks);
   const [tasksAttempt, setTasksAttempt] = useState(0);
+  const [itemsSnapshot, setItemsSnapshot] = useState<ItemsSnapshot>(initialItems);
+  const [itemsAttempt, setItemsAttempt] = useState(0);
+  const [itemStats, setItemStats] = useState<ItemStat[]>([]);
 
   useEffect(() => {
     const fail = (error: Error) => setSnapshot((current) => ({ ...current, error }));
@@ -90,6 +104,21 @@ export function HouseholdProvider({
     [householdId, tasksAttempt],
   );
 
+  useEffect(
+    () =>
+      listenToItems(
+        householdId,
+        (items) => setItemsSnapshot({ items, loaded: true, error: null }),
+        (error) => setItemsSnapshot((current) => ({ ...current, error })),
+      ),
+    [householdId, itemsAttempt],
+  );
+
+  useEffect(
+    () => listenToItemStats(householdId, setItemStats, () => {}),
+    [householdId, itemsAttempt],
+  );
+
   const retry = useCallback(() => {
     setSnapshot(initial);
     setAttempt((count) => count + 1);
@@ -98,6 +127,11 @@ export function HouseholdProvider({
   const retryTasks = useCallback(() => {
     setTasksSnapshot(initialTasks);
     setTasksAttempt((count) => count + 1);
+  }, []);
+
+  const retryItems = useCallback(() => {
+    setItemsSnapshot(initialItems);
+    setItemsAttempt((count) => count + 1);
   }, []);
 
   const value = useMemo<HouseholdContextValue>(() => {
@@ -116,8 +150,13 @@ export function HouseholdProvider({
       tasksLoading: !tasksSnapshot.loaded && !tasksSnapshot.error,
       tasksError: tasksSnapshot.error,
       retryTasks,
+      items: itemsSnapshot.items,
+      itemsLoading: !itemsSnapshot.loaded && !itemsSnapshot.error,
+      itemsError: itemsSnapshot.error,
+      retryItems,
+      itemStats,
     };
-  }, [snapshot, tasksSnapshot, uid, retry, retryTasks]);
+  }, [snapshot, tasksSnapshot, itemsSnapshot, itemStats, uid, retry, retryTasks, retryItems]);
 
   return <HouseholdContext.Provider value={value}>{children}</HouseholdContext.Provider>;
 }

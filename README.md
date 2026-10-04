@@ -41,7 +41,7 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
-`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna. Running it again keeps the household and replaces the code once it has expired.
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). The household also gets the design's shopping list (six open items, four bought) and a purchase history for the suggestions («Brot» 14×, «Milch» 12×, …), added whenever missing. `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna (and, on a fresh household, the bought items show «von Anna»). Running it again keeps the household and replaces the code once it has expired.
 
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
@@ -73,23 +73,23 @@ To remove someone: disable or delete the account (an open session can stay valid
 
 ## Scripts
 
-| Script                            | What it does                                                    |
-| --------------------------------- | --------------------------------------------------------------- |
-| `npm run dev`                     | Dev server against the project in `.env.local`                  |
-| `npm run dev:emu`                 | Dev server against the local emulators                          |
-| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)   |
-| `npm run seed`                    | Create the test accounts in the emulators                       |
-| `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks for Nevio; prints the code |
-| `npm run seed -- --with-anna`     | … plus Anna as a member («Bad putzen» rotates Nevio → Anna)     |
-| `npm run build`                   | Type-check and build to `dist/`                                 |
-| `npm run preview`                 | Serve the production build locally                              |
-| `npm run typecheck`               | TypeScript only                                                 |
-| `npm run lint`                    | ESLint                                                          |
-| `npm run format` / `format:check` | Prettier write / check                                          |
-| `npm test` / `test:run`           | Unit and component tests (watch / single run)                   |
-| `npm run test:coverage`           | Tests with coverage report in `coverage/`                       |
-| `npm run test:rules`              | Firestore security rules tests (starts the emulator)            |
-| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project     |
+| Script                            | What it does                                                              |
+| --------------------------------- | ------------------------------------------------------------------------- |
+| `npm run dev`                     | Dev server against the project in `.env.local`                            |
+| `npm run dev:emu`                 | Dev server against the local emulators                                    |
+| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)             |
+| `npm run seed`                    | Create the test accounts in the emulators                                 |
+| `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks and a shopping list; prints the code |
+| `npm run seed -- --with-anna`     | … plus Anna as a member («Bad putzen» rotates Nevio → Anna)               |
+| `npm run build`                   | Type-check and build to `dist/`                                           |
+| `npm run preview`                 | Serve the production build locally                                        |
+| `npm run typecheck`               | TypeScript only                                                           |
+| `npm run lint`                    | ESLint                                                                    |
+| `npm run format` / `format:check` | Prettier write / check                                                    |
+| `npm test` / `test:run`           | Unit and component tests (watch / single run)                             |
+| `npm run test:coverage`           | Tests with coverage report in `coverage/`                                 |
+| `npm run test:rules`              | Firestore security rules tests (starts the emulator)                      |
+| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project               |
 
 ## Testing
 
@@ -107,7 +107,11 @@ households/{hid}/members/{uid}       profile copy for display, role (owner | mem
 households/{hid}/tasks/{taskId}      title, notes?, assigneeId, dueDate ("YYYY-MM-DD"), priority, status, completedAt/By,
                                      recurring: recurrence, rotation?, seriesId, seriesIndex
                                      (next occurrence id «{seriesId}-{seriesIndex}», created on completion)
-households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned; later shopping, events)
+households/{hid}/shoppingItems/{id}  name, quantity?, notes?, category, checked, checkedAt/By
+households/{hid}/itemStats/{key}     purchase history for suggestions: name, category, count, lastPurchasedAt
+                                     (key = lowercased name, «/» as «∕»; survives «Gekaufte entfernen»)
+households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned;
+                                     item added / purchased; later events)
 invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
 ```
 
@@ -118,7 +122,9 @@ invites/{code}                       code lookup (ABC-1234) with a small preview
 - Multi-document writes (create, join, new code, profile edits) are single batches, and the rules cross-check the other documents of the batch with `getAfter()`, so an incomplete batch is rejected as a whole.
 - Every member reads and writes every task; the rules validate the fields (title 1–200, notes ≤ 2000, priority, date format, assignee is a member) and the status changes (complete sets `completedBy` = caller and server time; reopen removes both).
 - Recurring tasks: the rules validate the rule (frequencies, interval 1–52, weekdays, day / month), the rotation (current members, no duplicates, the assignee is the member at `index`), that a rule has a due date, and the series ids. Completing an occurrence and creating the next one is one batch; the next occurrence's fixed id means a second completion or «Nur diese» can't create it twice.
-- Task activity entries must match the task after the batch (title snapshot, «done» for a completion).
+- Every member reads and writes every shopping item; the rules validate the fields (name 1–100 without stray whitespace, quantity ≤ 30, notes ≤ 500, category) and the check (`checkedBy` = caller, server time) / uncheck. A checked item may only be created as a restore («Rückgängig» after «Gekaufte entfernen» or a delete).
+- `itemStats` docs are created with count 1 and change by exactly +1 (a purchase, server time) or −1 (an uncheck, never below 0); they're never deleted. The id must be the lowercased name for ASCII names (the rules' `lower()` leaves other letters alone, so non-ASCII names only need a plausible id). An uncheck never depends on the stats doc.
+- Task and shopping activity entries must match their target after the batch (title / name snapshot, «done» or checked for a completion / purchase).
 - Activity entries are append-only; everything not matched is denied.
 
 ## Deployment

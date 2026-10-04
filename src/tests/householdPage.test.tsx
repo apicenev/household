@@ -23,6 +23,9 @@ vi.mock("../services/memberService", () =>
 vi.mock("../services/taskService", () =>
   import("./householdFakes").then((fakes) => fakes.taskServiceMock),
 );
+vi.mock("../services/shoppingService", () =>
+  import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
+);
 const invites = vi.hoisted(() => ({ regenerateInvite: vi.fn() }));
 vi.mock("../services/inviteService", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/inviteService")>()),

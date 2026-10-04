@@ -1,6 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
+import { openItemCount } from "../../domain/shopping";
+import { shoppingCopy } from "../../lib/copy";
 import { cx } from "../../lib/cx";
+import { useHousehold } from "../../lib/household/useHousehold";
 import { OfflineBanner } from "./OfflineBanner";
 import { QuickAddSheet } from "./QuickAddSheet";
 import { Sidebar } from "./Sidebar";
@@ -22,6 +25,12 @@ export function AppLayout({ children }: { children?: ReactNode }) {
   // Start shows the brand in the mobile header (Dashboard.dc.html); other areas their name.
   const title = area && area.key !== "dashboard" ? area.label : undefined;
   const pushed = area?.key === "household";
+  const { household, items, itemsLoading, itemsError } = useHousehold();
+  // Einkauf: «4 offen» / «Alles erledigt» next to the title (B13).
+  const subtitle =
+    area?.key === "shopping" && household && !itemsLoading && !itemsError
+      ? shoppingCopy.openCount(openItemCount(items))
+      : undefined;
 
   // B12: back to the previous page if there is in-app history, otherwise to Start.
   function goBack() {
@@ -36,7 +45,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
         {pushed && area ? (
           <TopBar variant="back" title={area.label} onBack={goBack} className="lg:hidden" />
         ) : (
-          <TopBar title={title} className="lg:hidden" />
+          <TopBar title={title} subtitle={subtitle} className="lg:hidden" />
         )}
         <main
           className={cx(

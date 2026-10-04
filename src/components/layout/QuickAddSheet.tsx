@@ -8,6 +8,8 @@ import { useState } from "react";
 import { areas, terms } from "../../lib/copy";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Sheet } from "../ui/Sheet";
+import { QuickAddItemForm } from "../shopping/QuickAddItemForm";
+import { useOptionalShopping } from "../shopping/shoppingContext";
 import { QuickAddTaskForm } from "../tasks/QuickAddTaskForm";
 import { useOptionalTasks } from "../tasks/taskContext";
 import { ComingSoon } from "./ComingSoon";
@@ -22,13 +24,14 @@ const entries: Record<Entry, { label: string; icon: typeof CheckCircleIcon }> = 
 
 /**
  * Schnellerfassung (Sheets.dc.html, from the centre + and the sidebar «Neu»): Aufgabe /
- * Einkauf / Termin. «Aufgabe» since Phase 3; Einkauf and Termin show «Bald verfügbar» until
- * Phases 5 and 6. Without a loaded household (D8) «Aufgabe» shows «Bald verfügbar» too.
+ * Einkauf / Termin. «Aufgabe» since Phase 3, «Einkauf» since Phase 5; Termin shows «Bald
+ * verfügbar» until Phase 6. Without a loaded household (D8) all three show «Bald verfügbar».
  */
 export function QuickAddSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [entry, setEntry] = useState<Entry>("task");
   const current = entries[entry];
   const tasks = useOptionalTasks();
+  const shopping = useOptionalShopping();
 
   return (
     <Sheet
@@ -64,6 +67,8 @@ export function QuickAddSheet({ open, onClose }: { open: boolean; onClose: () =>
       />
       {entry === "task" && tasks ? (
         <QuickAddTaskForm tasks={tasks} onMoreOptions={onClose} />
+      ) : entry === "item" && shopping ? (
+        <QuickAddItemForm key="item" shopping={shopping} />
       ) : (
         <ComingSoon title={current.label} icon={current.icon} as="h2" className="py-8" />
       )}

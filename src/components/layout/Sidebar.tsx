@@ -9,18 +9,21 @@ import { Button } from "../ui/Button";
 import { AccountMenu } from "./AccountMenu";
 import { BrandTile } from "./BrandMark";
 import { sidebarItems, type NavItem } from "./navigation";
+import { openItemCount } from "../../domain/shopping";
 import { openTaskCount } from "../../domain/tasks";
 
 /**
  * Desktop sidebar (Sidebar.dc.html), 272 px on sunken: brand with the household name, «Neu»,
  * primary and secondary navigation, account footer with the role line («Besitzer · 2
- * Mitglieder»). The open-task count next to Aufgaben (Phase 3 B10); the Einkauf count
- * arrives with Phase 5.
+ * Mitglieder»). The open counts next to Aufgaben (Phase 3 B10) and Einkauf (Phase 5 B13).
  */
 export function Sidebar({ onQuickAdd, className }: { onQuickAdd: () => void; className?: string }) {
   const member = useCurrentMember();
-  const { household, members, isOwner, tasks } = useHousehold();
-  const counts: Partial<Record<NavItem["key"], number>> = { tasks: openTaskCount(tasks) };
+  const { household, members, isOwner, tasks, items } = useHousehold();
+  const counts: Partial<Record<NavItem["key"], number>> = {
+    tasks: openTaskCount(tasks),
+    shopping: openItemCount(items),
+  };
   // Without a household (load error, D8) the footer falls back to the email.
   const roleLine = household
     ? `${isOwner ? roleLabels.owner : roleLabels.member} · ${memberCountLabel(members.length)}`

@@ -8,6 +8,7 @@
  * a second browser profile. Since Phase 3 the household also gets the design's example tasks
  * (relative to today), unless it has tasks already. Since Phase 4 it also gets three recurring
  * tasks with fixed ids, added whenever they're missing (also to a household seeded before).
+ * Since Phase 5 also the design's shopping list and purchase history, likewise.
  *
  * With `--with-anna` (Phase 4, implies `--household`) Anna joins «Musterstrasse 12» like
  * joinHousehold would, and «Bad putzen» rotates Nevio → Anna.
@@ -23,6 +24,7 @@ import { FieldValue, getFirestore, Timestamp, type Firestore } from "firebase-ad
 import { weekdayOfKey } from "../src/domain/dateKeys";
 import { generateInviteCode, inviteExpiresAt, isInviteExpired } from "../src/domain/invite";
 import { avatarColorFor, initialsFor } from "../src/domain/member";
+import { statKey } from "../src/domain/shopping";
 import { todayKey } from "../src/domain/tasks";
 
 const PROJECT_ID = "demo-household";
@@ -310,6 +312,96 @@ async function seedRecurringTasks(
 }
 
 /**
+ * The shopping list and purchase history of `Shopping.dc.html` (Phase 5 §5.7) with fixed ids,
+ * so reruns add only the missing ones. Every bought item has a stats doc with a count ≥ 1,
+ * as the app would have written it (B6); bought items are Anna's once she's a member.
+ */
+async function seedShopping(
+  db: Firestore,
+  hid: string,
+  ownerUid: string,
+  annaUid: string | null,
+): Promise<void> {
+  const now = Timestamp.now();
+  const hoursAgo = (hours: number) => Timestamp.fromMillis(Date.now() - hours * 60 * 60 * 1000);
+  const buyer = annaUid ?? ownerUid;
+  const items = [
+    { id: "seed-milk", name: "Milch", quantity: "2 l", category: "groceries" },
+    {
+      id: "seed-coffee",
+      name: "Kaffeebohnen",
+      notes: "Ganze Bohnen, mittlere Röstung",
+      category: "groceries",
+    },
+    {
+      id: "seed-banana",
+      name: "Bananen",
+      quantity: "6",
+      notes: "Nicht zu reif",
+      category: "groceries",
+    },
+    { id: "seed-tabs", name: "Geschirrspültabs", quantity: "1 Packung", category: "household" },
+    { id: "seed-ibu", name: "Ibuprofen", notes: "400 mg, 20 Tabletten", category: "pharmacy" },
+    {
+      id: "seed-bulbs",
+      name: "Glühbirnen E27",
+      quantity: "2",
+      notes: "Warmweiss",
+      category: "other",
+    },
+    { id: "seed-bread", name: "Brot", category: "groceries", boughtHoursAgo: 4 },
+    { id: "seed-eggs", name: "Eier", quantity: "10", category: "groceries", boughtHoursAgo: 3 },
+    { id: "seed-tp", name: "WC-Papier", category: "household", boughtHoursAgo: 2 },
+    { id: "seed-oil", name: "Olivenöl", category: "groceries", boughtHoursAgo: 1 },
+  ];
+  const history: Array<[string, string, number]> = [
+    ["Brot", "groceries", 14],
+    ["Milch", "groceries", 12],
+    ["Eier", "groceries", 11],
+    ["Hafermilch", "groceries", 9],
+    ["Tomaten", "groceries", 8],
+    ["WC-Papier", "household", 7],
+    ["Butter", "groceries", 6],
+    ["Olivenöl", "groceries", 5],
+    ["Zwiebeln", "groceries", 5],
+    ["Haushaltpapier", "household", 4],
+    ["Orangen", "groceries", 3],
+    ["Oregano", "groceries", 2],
+    ["Pflaster", "pharmacy", 2],
+  ];
+
+  let addedItems = 0;
+  for (const { id, boughtHoursAgo, ...item } of items) {
+    const ref = db.doc(`households/${hid}/shoppingItems/${id}`);
+    if ((await ref.get()).exists) continue;
+    await ref.set({
+      ...item,
+      checked: boughtHoursAgo !== undefined,
+      ...(boughtHoursAgo !== undefined
+        ? { checkedAt: hoursAgo(boughtHoursAgo), checkedBy: buyer }
+        : {}),
+      createdBy: ownerUid,
+      createdAt: now,
+      updatedAt: now,
+    });
+    addedItems += 1;
+  }
+
+  let addedStats = 0;
+  for (const [name, category, count] of history) {
+    const ref = db.doc(`households/${hid}/itemStats/${statKey(name)}`);
+    if ((await ref.get()).exists) continue;
+    await ref.set({ name, category, count, lastPurchasedAt: hoursAgo(24 + count) });
+    addedStats += 1;
+  }
+  console.log(
+    addedItems + addedStats > 0
+      ? `+ ${addedItems} shopping items, ${addedStats} purchase stats`
+      : "= shopping list exists",
+  );
+}
+
+/**
  * Anna joins «Musterstrasse 12» (Phase 4, `--with-anna`), written like
  * inviteService.joinHousehold. Skipped if she's in a household already.
  */
@@ -398,7 +490,9 @@ async function main() {
     await seedTasks(db, hid, uids[0]);
     const memberIds = ((await db.doc(`households/${hid}`).get()).data()?.memberIds ??
       []) as string[];
-    await seedRecurringTasks(db, hid, uids[0], memberIds.includes(uids[1]) ? uids[1] : null);
+    const annaUid = memberIds.includes(uids[1]) ? uids[1] : null;
+    await seedRecurringTasks(db, hid, uids[0], annaUid);
+    await seedShopping(db, hid, uids[0], annaUid);
     const invite = (await db.doc(`invites/${code}`).get()).data();
     const validUntil = inviteExpiresAt((invite?.createdAt as Timestamp).toDate());
     console.log(
