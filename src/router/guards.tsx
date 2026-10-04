@@ -2,6 +2,7 @@ import { Suspense, type ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { HouseholdLoadError } from "../components/household/HouseholdLoadError";
 import { AppLayout } from "../components/layout/AppLayout";
+import { CalendarProvider } from "../components/calendar/CalendarProvider";
 import { ShoppingProvider } from "../components/shopping/ShoppingProvider";
 import { TaskProvider } from "../components/tasks/TaskProvider";
 import { AppStartScreen } from "../components/layout/AppStartScreen";
@@ -68,7 +69,9 @@ function HouseholdShell({ children }: { children?: ReactNode }) {
   return (
     <TaskProvider>
       <ShoppingProvider>
-        <AppLayout>{children}</AppLayout>
+        <CalendarProvider>
+          <AppLayout>{children}</AppLayout>
+        </CalendarProvider>
       </ShoppingProvider>
     </TaskProvider>
   );

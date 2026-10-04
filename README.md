@@ -41,7 +41,7 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
-`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). The household also gets the design's shopping list (six open items, four bought) and a purchase history for the suggestions («Brot» 14×, «Milch» 12×, …), added whenever missing. `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna (and, on a fresh household, the bought items show «von Anna»). Running it again keeps the household and replaces the code once it has expired.
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). The household also gets the design's shopping list (six open items, four bought) and a purchase history for the suggestions («Brot» 14×, «Milch» 12×, …), and seven calendar events relative to today («Möbellieferung» tomorrow, «Znacht mit Freunden», «Arzttermin» for Anna, the 8-day «Ferien», «Grossputz», «Altpapiersammlung» and a «Spieleabend» past midnight), all added whenever missing. `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna (and, on a fresh household, the bought items show «von Anna»). Running it again keeps the household and replaces the code once it has expired.
 
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
@@ -73,23 +73,23 @@ To remove someone: disable or delete the account (an open session can stay valid
 
 ## Scripts
 
-| Script                            | What it does                                                              |
-| --------------------------------- | ------------------------------------------------------------------------- |
-| `npm run dev`                     | Dev server against the project in `.env.local`                            |
-| `npm run dev:emu`                 | Dev server against the local emulators                                    |
-| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)             |
-| `npm run seed`                    | Create the test accounts in the emulators                                 |
-| `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks and a shopping list; prints the code |
-| `npm run seed -- --with-anna`     | … plus Anna as a member («Bad putzen» rotates Nevio → Anna)               |
-| `npm run build`                   | Type-check and build to `dist/`                                           |
-| `npm run preview`                 | Serve the production build locally                                        |
-| `npm run typecheck`               | TypeScript only                                                           |
-| `npm run lint`                    | ESLint                                                                    |
-| `npm run format` / `format:check` | Prettier write / check                                                    |
-| `npm test` / `test:run`           | Unit and component tests (watch / single run)                             |
-| `npm run test:coverage`           | Tests with coverage report in `coverage/`                                 |
-| `npm run test:rules`              | Firestore security rules tests (starts the emulator)                      |
-| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project               |
+| Script                            | What it does                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------ |
+| `npm run dev`                     | Dev server against the project in `.env.local`                                             |
+| `npm run dev:emu`                 | Dev server against the local emulators                                                     |
+| `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)                              |
+| `npm run seed`                    | Create the test accounts in the emulators                                                  |
+| `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks, a shopping list and calendar events; prints the code |
+| `npm run seed -- --with-anna`     | … plus Anna as a member («Bad putzen» rotates Nevio → Anna)                                |
+| `npm run build`                   | Type-check and build to `dist/`                                                            |
+| `npm run preview`                 | Serve the production build locally                                                         |
+| `npm run typecheck`               | TypeScript only                                                                            |
+| `npm run lint`                    | ESLint                                                                                     |
+| `npm run format` / `format:check` | Prettier write / check                                                                     |
+| `npm test` / `test:run`           | Unit and component tests (watch / single run)                                              |
+| `npm run test:coverage`           | Tests with coverage report in `coverage/`                                                  |
+| `npm run test:rules`              | Firestore security rules tests (starts the emulator)                                       |
+| `npm run deploy:rules`            | Deploy `firestore.rules` and indexes to the default project                                |
 
 ## Testing
 
@@ -110,8 +110,11 @@ households/{hid}/tasks/{taskId}      title, notes?, assigneeId, dueDate ("YYYY-M
 households/{hid}/shoppingItems/{id}  name, quantity?, notes?, category, checked, checkedAt/By
 households/{hid}/itemStats/{key}     purchase history for suggestions: name, category, count, lastPurchasedAt
                                      (key = lowercased name, «/» as «∕»; survives «Gekaufte entfernen»)
+households/{hid}/events/{id}         title, description?, category, allDay, start, end, participants ("household" | uids)
+                                     (timed: instants in the household time zone; all-day: 00:00 UTC of the first /
+                                     last day, so a time-zone change never moves them)
 households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned;
-                                     item added / purchased; later events)
+                                     item added / purchased; event created)
 invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
 ```
 
@@ -124,7 +127,8 @@ invites/{code}                       code lookup (ABC-1234) with a small preview
 - Recurring tasks: the rules validate the rule (frequencies, interval 1–52, weekdays, day / month), the rotation (current members, no duplicates, the assignee is the member at `index`), that a rule has a due date, and the series ids. Completing an occurrence and creating the next one is one batch; the next occurrence's fixed id means a second completion or «Nur diese» can't create it twice.
 - Every member reads and writes every shopping item; the rules validate the fields (name 1–100 without stray whitespace, quantity ≤ 30, notes ≤ 500, category) and the check (`checkedBy` = caller, server time) / uncheck. A checked item may only be created as a restore («Rückgängig» after «Gekaufte entfernen» or a delete).
 - `itemStats` docs are created with count 1 and change by exactly +1 (a purchase, server time) or −1 (an uncheck, never below 0); they're never deleted. The id must be the lowercased name for ASCII names (the rules' `lower()` leaves other letters alone, so non-ASCII names only need a plausible id). An uncheck never depends on the stats doc.
-- Task and shopping activity entries must match their target after the batch (title / name snapshot, «done» or checked for a completion / purchase).
+- Every member reads and writes every event; the rules check each write as a whole event (title 1–200 without leading / trailing spaces, description ≤ 2000, category, end ≥ start, at most 366 calendar days, all-day dates at 00:00 UTC, participants «household» or 1–20 distinct **current** members), so an edit must drop members who have left. No recurrence fields yet (Phase 7).
+- Task, shopping and event activity entries must match their target after the batch (title / name snapshot, «done» or checked for a completion / purchase).
 - Activity entries are append-only; everything not matched is denied.
 
 ## Deployment

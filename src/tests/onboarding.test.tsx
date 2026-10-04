@@ -22,6 +22,9 @@ vi.mock("../services/taskService", () =>
 vi.mock("../services/shoppingService", () =>
   import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
 );
+vi.mock("../services/eventService", () =>
+  import("./householdFakes").then((fakes) => fakes.eventServiceMock),
+);
 
 const invites = vi.hoisted(() => ({
   getInvite: vi.fn<(code: string) => Promise<Invite | null>>(),

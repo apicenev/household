@@ -8,7 +8,8 @@
  * a second browser profile. Since Phase 3 the household also gets the design's example tasks
  * (relative to today), unless it has tasks already. Since Phase 4 it also gets three recurring
  * tasks with fixed ids, added whenever they're missing (also to a household seeded before).
- * Since Phase 5 also the design's shopping list and purchase history, likewise.
+ * Since Phase 5 also the design's shopping list and purchase history, likewise. Since Phase 6
+ * also the calendar's example events (relative to today, fixed ids), likewise.
  *
  * With `--with-anna` (Phase 4, implies `--household`) Anna joins «Musterstrasse 12» like
  * joinHousehold would, and «Bad putzen» rotates Nevio → Anna.
@@ -21,7 +22,8 @@
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
-import { weekdayOfKey } from "../src/domain/dateKeys";
+import { addDaysToKey, weekdayOfKey } from "../src/domain/dateKeys";
+import { allDayToStored, zonedToInstant } from "../src/domain/eventTime";
 import { generateInviteCode, inviteExpiresAt, isInviteExpired } from "../src/domain/invite";
 import { avatarColorFor, initialsFor } from "../src/domain/member";
 import { statKey } from "../src/domain/shopping";
@@ -402,6 +404,98 @@ async function seedShopping(
 }
 
 /**
+ * The example events of `Calendar.dc.html` (Phase 6 §6.7), relative to today in Zurich, with
+ * fixed ids, so reruns add only the missing ones: all-day, timed, a multi-day «Ferien» across
+ * a week boundary, one event for Anna only (Nevio while she isn't a member) and a late event
+ * that crosses midnight (D55). «Grossputz» and «Altpapiersammlung» are one-off until Phase 7.
+ */
+async function seedEvents(
+  db: Firestore,
+  hid: string,
+  ownerUid: string,
+  annaUid: string | null,
+): Promise<void> {
+  const zone = "Europe/Zurich";
+  const now = Timestamp.now();
+  const today = dayFromToday(0);
+  const timed = (day: string, from: string, to: string, toDay = day) => ({
+    allDay: false,
+    start: Timestamp.fromDate(zonedToInstant(day, from, zone)),
+    end: Timestamp.fromDate(zonedToInstant(toDay, to, zone)),
+  });
+  const allDay = (first: string, last: string) => {
+    const { start, end } = allDayToStored(first, last);
+    return { allDay: true, start: Timestamp.fromDate(start), end: Timestamp.fromDate(end) };
+  };
+  const events = [
+    {
+      id: "seed-furniture",
+      title: "Möbellieferung",
+      description: "Neues Sofa. Der Kurier ruft 30 Minuten vorher an.",
+      category: "home",
+      ...allDay(addDaysToKey(today, 1), addDaysToKey(today, 1)),
+    },
+    {
+      id: "seed-dinner",
+      title: "Znacht mit Freunden",
+      description: "Bei Lena und Jonas. Wir bringen das Dessert.",
+      category: "social",
+      ...timed(addDaysToKey(today, 2), "19:30", "22:30"),
+    },
+    {
+      id: "seed-doctor",
+      title: "Arzttermin",
+      description: "Jährliche Kontrolle bei Dr. Keller.",
+      category: "appointment",
+      ...timed(addDaysToKey(today, 6), "08:15", "09:00"),
+      participants: [annaUid ?? ownerUid],
+    },
+    {
+      id: "seed-trip",
+      title: "Ferien",
+      description: "Lissabon. Der Flug geht am ersten Tag um 07:40.",
+      category: "travel",
+      ...allDay(addDaysToKey(today, 14), addDaysToKey(today, 21)),
+    },
+    {
+      id: "seed-cleaning",
+      title: "Grossputz",
+      description: "Küche, Bad, Böden und Fenster. Aufgeteilt nach Zimmer.",
+      category: "home",
+      ...timed(nextWeekday(6), "10:00", "12:00"),
+    },
+    {
+      id: "seed-recycling",
+      title: "Altpapiersammlung",
+      description: "Papier und Karton. Am Vorabend bereitstellen.",
+      category: "reminder",
+      ...allDay(nextWeekday(1), nextWeekday(1)),
+    },
+    {
+      id: "seed-games",
+      title: "Spieleabend",
+      category: "social",
+      ...timed(today, "22:00", "01:00", addDaysToKey(today, 1)),
+    },
+  ];
+
+  let added = 0;
+  for (const { id, ...event } of events) {
+    const ref = db.doc(`households/${hid}/events/${id}`);
+    if ((await ref.get()).exists) continue;
+    await ref.set({
+      participants: "household",
+      ...event,
+      createdBy: ownerUid,
+      createdAt: now,
+      updatedAt: now,
+    });
+    added += 1;
+  }
+  console.log(added > 0 ? `+ ${added} calendar events` : "= calendar events exist");
+}
+
+/**
  * Anna joins «Musterstrasse 12» (Phase 4, `--with-anna`), written like
  * inviteService.joinHousehold. Skipped if she's in a household already.
  */
@@ -493,6 +587,7 @@ async function main() {
     const annaUid = memberIds.includes(uids[1]) ? uids[1] : null;
     await seedRecurringTasks(db, hid, uids[0], annaUid);
     await seedShopping(db, hid, uids[0], annaUid);
+    await seedEvents(db, hid, uids[0], annaUid);
     const invite = (await db.doc(`invites/${code}`).get()).data();
     const validUntil = inviteExpiresAt((invite?.createdAt as Timestamp).toDate());
     console.log(

@@ -20,11 +20,16 @@ export interface SegmentedControlProps<T extends string> {
   /** Segments as wide as their content instead of equal widths. */
   fit?: boolean;
   disabled?: boolean;
+  /**
+   * radio (default): a choice inside a form. tabs: switches views of a page (tablist / tab
+   * with aria-selected, e.g. Kalender «Monat» / «Demnächst»); keyboard as for radios.
+   */
+  semantics?: "radio" | "tabs";
   className?: string;
 }
 
 /**
- * Single choice from a few options (radio group semantics): one tab stop,
+ * Single choice from a few options (radio group semantics, or tabs): one tab stop,
  * arrow keys move and select.
  */
 export function SegmentedControl<T extends string>({
@@ -34,9 +39,11 @@ export function SegmentedControl<T extends string>({
   size = "md",
   fit = false,
   disabled = false,
+  semantics = "radio",
   className,
   "aria-label": ariaLabel,
 }: SegmentedControlProps<T>) {
+  const tabs = semantics === "tabs";
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
   const selectedIndex = Math.max(
     0,
@@ -67,7 +74,7 @@ export function SegmentedControl<T extends string>({
 
   return (
     <div
-      role="radiogroup"
+      role={tabs ? "tablist" : "radiogroup"}
       aria-label={ariaLabel}
       aria-disabled={disabled || undefined}
       className={cx(
@@ -85,8 +92,9 @@ export function SegmentedControl<T extends string>({
               refs.current[index] = element;
             }}
             type="button"
-            role="radio"
-            aria-checked={selected}
+            role={tabs ? "tab" : "radio"}
+            aria-checked={tabs ? undefined : selected}
+            aria-selected={tabs ? selected : undefined}
             tabIndex={selected ? 0 : -1}
             disabled={disabled}
             onClick={() => onChange(option.value)}

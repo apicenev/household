@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { DateField } from "./DateField";
+import { DatePill, TimePill } from "./DateTimePill";
 import { FilterChip } from "./FilterChip";
 import { SegmentedControl } from "./SegmentedControl";
 import { TextField } from "./TextField";
@@ -84,6 +85,31 @@ describe("SegmentedControl", () => {
     await userEvent.tab();
     expect(document.body).toHaveFocus();
   });
+
+  it("can act as tabs (tablist / tab with aria-selected)", async () => {
+    function Tabs() {
+      const [value, setValue] = useState("month");
+      return (
+        <SegmentedControl
+          aria-label="Ansicht"
+          semantics="tabs"
+          value={value}
+          onChange={setValue}
+          options={[
+            { value: "month", label: "Monat" },
+            { value: "upcoming", label: "Demnächst" },
+          ]}
+        />
+      );
+    }
+    render(<Tabs />);
+    expect(screen.getByRole("tablist", { name: "Ansicht" })).toBeInTheDocument();
+    const month = screen.getByRole("tab", { name: "Monat" });
+    expect(month).toHaveAttribute("aria-selected", "true");
+    expect(month).not.toHaveAttribute("aria-checked");
+    await userEvent.click(screen.getByRole("tab", { name: "Demnächst" }));
+    expect(screen.getByRole("tab", { name: "Demnächst" })).toHaveAttribute("aria-selected", "true");
+  });
 });
 
 describe("FilterChip", () => {
@@ -124,5 +150,36 @@ describe("DateField", () => {
     expect(saturday).toHaveTextContent("Sa.");
     await userEvent.click(saturday);
     expect(saturday).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+describe("DatePill / TimePill (Phase 6 D48)", () => {
+  function Pills({ invalid = false }: { invalid?: boolean }) {
+    const [date, setDate] = useState("2026-10-03");
+    const [time, setTime] = useState("10:00");
+    return (
+      <>
+        <DatePill label="Beginn, Datum" value={date} onChange={setDate} />
+        <TimePill label="Beginn, Uhrzeit" value={time} onChange={setTime} invalid={invalid} />
+      </>
+    );
+  }
+
+  it("shows the value and changes it through the native input", () => {
+    render(<Pills />);
+    expect(screen.getByText("Sa., 3. Okt.")).toBeInTheDocument();
+    const date = screen.getByLabelText("Beginn, Datum");
+    expect(date).toHaveAttribute("type", "date");
+    fireEvent.change(date, { target: { value: "2026-10-14" } });
+    expect(screen.getByText("Mi., 14. Okt.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Beginn, Uhrzeit"), { target: { value: "19:30" } });
+    expect(screen.getByText("19:30")).toBeInTheDocument();
+  });
+
+  it("ignores clearing (a start is required) and marks invalid values", () => {
+    render(<Pills invalid />);
+    fireEvent.change(screen.getByLabelText("Beginn, Datum"), { target: { value: "" } });
+    expect(screen.getByText("Sa., 3. Okt.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Beginn, Uhrzeit")).toHaveAttribute("aria-invalid", "true");
   });
 });

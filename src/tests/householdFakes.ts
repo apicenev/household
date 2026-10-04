@@ -1,9 +1,12 @@
 import { vi } from "vitest";
 import type { RecurrenceContext } from "../domain/tasks";
 import type {
+  CalendarEvent,
+  EventChanges,
   Household,
   ItemStat,
   Member,
+  NewEventInput,
   NewShoppingItemInput,
   NewTaskInput,
   ShoppingItem,
@@ -95,6 +98,30 @@ export function makeItem(overrides: Partial<ShoppingItem> = {}): ShoppingItem {
   };
 }
 
+let eventSeq = 0;
+
+/**
+ * A calendar event as the provider exposes it: timed, «Sonstiges», for everyone, on
+ * Fr., 2. Okt. 2026 19:30–22:30 in Zurich by default.
+ */
+export function makeEvent(overrides: Partial<CalendarEvent> = {}): CalendarEvent {
+  eventSeq += 1;
+  return {
+    id: `event${eventSeq}`,
+    title: `Termin ${eventSeq}`,
+    category: "other",
+    allDay: false,
+    start: new Date("2026-10-02T17:30:00Z"),
+    end: new Date("2026-10-02T20:30:00Z"),
+    participants: "household",
+    createdBy: "nevio",
+    createdAt: new Date(Date.UTC(2026, 8, 1, 10, 0, eventSeq)),
+    updatedAt: new Date(Date.UTC(2026, 8, 1, 10, 0, eventSeq)),
+    hasPendingWrites: false,
+    ...overrides,
+  };
+}
+
 export const defaultMembers = (): Member[] => [
   makeMember({ uid: "anna", displayName: "Anna", initials: "AN" }),
   makeMember({
@@ -129,6 +156,11 @@ export const fakeStore = {
   itemsError: null as Error | null,
   /** The shopping listener doesn't answer until emitItems() (D38). */
   holdItems: false,
+  events: [] as CalendarEvent[],
+  /** When set, only the event listener fails with it. */
+  eventsError: null as Error | null,
+  /** The event listener doesn't answer until emitEvents() (D49). */
+  holdEvents: false,
   /** Listeners don't answer until emit() (loading state). */
   hold: false,
   householdListeners: new Set<Listener<Household | null>>(),
@@ -136,6 +168,7 @@ export const fakeStore = {
   taskListeners: new Set<Listener<Task[]>>(),
   itemListeners: new Set<Listener<ShoppingItem[]>>(),
   statListeners: new Set<Listener<ItemStat[]>>(),
+  eventListeners: new Set<Listener<CalendarEvent[]>>(),
   /** Household ids in subscription / unsubscription order. */
   subscribed: [] as string[],
   unsubscribed: [] as string[],
@@ -154,6 +187,10 @@ export const fakeStore = {
     this.holdItems = false;
     this.itemListeners.clear();
     this.statListeners.clear();
+    this.events = [];
+    this.eventsError = null;
+    this.holdEvents = false;
+    this.eventListeners.clear();
     this.householdListeners.clear();
     this.memberListeners.clear();
     this.taskListeners.clear();
@@ -167,6 +204,18 @@ export const fakeStore = {
     for (const listener of this.memberListeners) deliverMembers(listener);
     this.emitTasks();
     this.emitItems();
+    this.emitEvents();
+  },
+
+  /** Delivers the current events to every event listener. */
+  emitEvents() {
+    for (const listener of this.eventListeners) deliverEvents(listener);
+  },
+
+  /** Replaces the events and delivers them (another member's change, a server echo). */
+  setEvents(events: CalendarEvent[]) {
+    this.events = events;
+    this.emitEvents();
   },
 
   /** Delivers the current shopping items and stats to their listeners. */
@@ -202,6 +251,11 @@ function deliverTasks(listener: Listener<Task[]>) {
 function deliverItems(listener: Listener<ShoppingItem[]>) {
   if (fakeStore.itemsError) listener.onError(fakeStore.itemsError);
   else listener.onChange(fakeStore.items);
+}
+
+function deliverEvents(listener: Listener<CalendarEvent[]>) {
+  if (fakeStore.eventsError) listener.onError(fakeStore.eventsError);
+  else listener.onChange(fakeStore.events);
 }
 
 function deliverHousehold(listener: Listener<Household | null>) {
@@ -350,4 +404,29 @@ export const shoppingServiceMock = {
       ) => { removed: ShoppingItem[]; committed: Promise<void> }
     >(),
   restoreItems: vi.fn<(hid: string, items: readonly ShoppingItem[]) => Promise<void>>(),
+};
+
+export const eventServiceMock = {
+  listenToEvents: (
+    hid: string,
+    onChange: (events: CalendarEvent[]) => void,
+    onError: (error: Error) => void,
+  ) => {
+    const listener = { hid, onChange, onError };
+    fakeStore.eventListeners.add(listener);
+    if (!fakeStore.hold && !fakeStore.holdEvents) deliverEvents(listener);
+    return () => {
+      fakeStore.eventListeners.delete(listener);
+    };
+  },
+  createEvent:
+    vi.fn<
+      (
+        hid: string,
+        input: NewEventInput,
+        actorId: string,
+      ) => { id: string; committed: Promise<void> }
+    >(),
+  updateEvent: vi.fn<(hid: string, eventId: string, changes: EventChanges) => Promise<void>>(),
+  deleteEvent: vi.fn<(hid: string, eventId: string) => Promise<void>>(),
 };

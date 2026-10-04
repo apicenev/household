@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shoppingCopy, taskCopy } from "./copy";
+import { calendarCopy, shoppingCopy, taskCopy } from "./copy";
 
 describe("taskCopy", () => {
   it("names everyone the deleted task disappears for (D22)", () => {
@@ -52,6 +52,48 @@ describe("shoppingCopy", () => {
 
   it("has no «ß»", () => {
     const strings = Object.values(shoppingCopy).filter((v) => typeof v === "string");
+    expect(strings.join(" ")).not.toContain("ß");
+  });
+});
+
+describe("calendarCopy", () => {
+  it("counts events and days", () => {
+    expect(calendarCopy.eventCount(1)).toBe("1 Termin");
+    expect(calendarCopy.eventCount(2)).toBe("2 Termine");
+    expect(calendarCopy.days(1)).toBe("1 Tag");
+    expect(calendarCopy.days(8)).toBe("8 Tage");
+    expect(calendarCopy.dayOf(3, 8)).toBe("Tag 3 von 8");
+    expect(calendarCopy.more(2)).toBe("+2 weitere");
+  });
+
+  it("labels day cells as designed (D57)", () => {
+    expect(calendarCopy.cellLabel("Sa., 3. Okt.", true, 2)).toBe("Sa., 3. Okt., heute, 2 Termine");
+    expect(calendarCopy.cellLabel("Mi., 14. Okt.", false, 1)).toBe("Mi., 14. Okt., 1 Termin");
+    expect(calendarCopy.cellLabel("Do., 15. Okt.", false, 0)).toBe("Do., 15. Okt., keine Termine");
+  });
+
+  it("builds the D55 labels and meta lines", () => {
+    expect(calendarCopy.until("Sa.")).toBe("bis Sa.");
+    expect(calendarCopy.until("02:00")).toBe("bis 02:00");
+    expect(calendarCopy.meta(calendarCopy.noRepeat, "19:30–22:30")).toBe(
+      "Wiederholt sich nicht · 19:30–22:30",
+    );
+    expect(calendarCopy.meta("Mi., 14. – Mi., 21. Okt.", "8 Tage", "", "Alle")).toBe(
+      "Mi., 14. – Mi., 21. Okt. · 8 Tage · Alle",
+    );
+  });
+
+  it("names everyone the deleted event disappears for (D53)", () => {
+    expect(calendarCopy.deleteTitle("Arzttermin")).toBe("«Arzttermin» löschen?");
+    expect(calendarCopy.deleteText(["Nevio"])).toBe("Der Termin wird gelöscht.");
+    expect(calendarCopy.deleteText(["Nevio", "Anna"])).toBe(
+      "Der Termin verschwindet für Nevio und Anna.",
+    );
+  });
+
+  it("uses «…» quotes and has no «ß»", () => {
+    expect(calendarCopy.addedStatus("Znacht")).toBe("«Znacht» zum Kalender hinzugefügt");
+    const strings = Object.values(calendarCopy).filter((v) => typeof v === "string");
     expect(strings.join(" ")).not.toContain("ß");
   });
 });

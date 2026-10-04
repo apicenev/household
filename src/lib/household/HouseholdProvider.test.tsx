@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeStore, makeItem, makeMember, makeTask } from "../../tests/householdFakes";
+import { fakeStore, makeEvent, makeItem, makeMember, makeTask } from "../../tests/householdFakes";
 import { HouseholdProvider } from "./HouseholdProvider";
 import { useHousehold } from "./useHousehold";
 
@@ -16,6 +16,9 @@ vi.mock("../../services/taskService", () =>
 );
 vi.mock("../../services/shoppingService", () =>
   import("../../tests/householdFakes").then((fakes) => fakes.shoppingServiceMock),
+);
+vi.mock("../../services/eventService", () =>
+  import("../../tests/householdFakes").then((fakes) => fakes.eventServiceMock),
 );
 
 function TasksProbe() {
@@ -58,6 +61,26 @@ function ItemsProbe() {
 
 const items = () => JSON.parse(screen.getByTestId("items").textContent ?? "{}");
 
+function EventsProbe() {
+  const { events, eventsLoading, eventsError, retryEvents } = useHousehold();
+  return (
+    <>
+      <output data-testid="events">
+        {JSON.stringify({
+          events: events.map((event) => event.id),
+          eventsLoading,
+          eventsError: eventsError?.message ?? null,
+        })}
+      </output>
+      <button type="button" onClick={retryEvents}>
+        retryEvents
+      </button>
+    </>
+  );
+}
+
+const events = () => JSON.parse(screen.getByTestId("events").textContent ?? "{}");
+
 function Probe() {
   const { household, members, me, isOwner, memberById, loading, error } = useHousehold();
   return (
@@ -83,6 +106,7 @@ function renderProvider(uid: string) {
       <Probe />
       <TasksProbe />
       <ItemsProbe />
+      <EventsProbe />
     </HouseholdProvider>,
   );
 }
@@ -228,5 +252,34 @@ describe("HouseholdProvider", () => {
     unmount();
     expect(fakeStore.itemListeners.size).toBe(0);
     expect(fakeStore.statListeners.size).toBe(0);
+  });
+
+  it("exposes the events with their own loading state, without blocking the shell (B10)", () => {
+    fakeStore.holdEvents = true;
+    renderProvider("nevio");
+    expect(events()).toEqual({ events: [], eventsLoading: true, eventsError: null });
+    expect(state().loading).toBe(false);
+    fakeStore.events = [makeEvent({ id: "dinner" })];
+    act(() => fakeStore.emitEvents());
+    expect(events()).toEqual({ events: ["dinner"], eventsLoading: false, eventsError: null });
+  });
+
+  it("reports an event listener error separately and retries it (D50)", () => {
+    fakeStore.eventsError = new Error("boom");
+    renderProvider("nevio");
+    expect(state()).toMatchObject({ loading: false, error: null });
+    expect(events()).toMatchObject({ eventsLoading: false, eventsError: "boom" });
+    fakeStore.eventsError = null;
+    fakeStore.events = [makeEvent({ id: "dinner" })];
+    act(() => screen.getByRole("button", { name: "retryEvents" }).click());
+    expect(events()).toMatchObject({ events: ["dinner"], eventsError: null });
+    expect(fakeStore.eventListeners.size).toBe(1);
+  });
+
+  it("unsubscribes the event listener on unmount", () => {
+    const { unmount } = renderProvider("nevio");
+    expect(fakeStore.eventListeners.size).toBe(1);
+    unmount();
+    expect(fakeStore.eventListeners.size).toBe(0);
   });
 });

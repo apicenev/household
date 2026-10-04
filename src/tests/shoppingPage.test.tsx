@@ -22,6 +22,9 @@ vi.mock("../services/taskService", () =>
 vi.mock("../services/shoppingService", () =>
   import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
 );
+vi.mock("../services/eventService", () =>
+  import("./householdFakes").then((fakes) => fakes.eventServiceMock),
+);
 
 function renderShopping() {
   const auth: AuthContextValue = {

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { isOwner, sortMembers } from "../../domain/household";
+import { listenToEvents } from "../../services/eventService";
 import { listenToHousehold } from "../../services/householdService";
 import { listenToMembers } from "../../services/memberService";
 import { listenToItems, listenToItemStats } from "../../services/shoppingService";
 import { listenToTasks } from "../../services/taskService";
-import type { Household, ItemStat, Member, ShoppingItem, Task } from "../../types";
+import type { CalendarEvent, Household, ItemStat, Member, ShoppingItem, Task } from "../../types";
 import { HouseholdContext, type HouseholdContextValue } from "./useHousehold";
 
 interface Snapshot {
@@ -39,14 +40,23 @@ interface ItemsSnapshot {
 
 const initialItems: ItemsSnapshot = { items: [], loaded: false, error: null };
 
+interface EventsSnapshot {
+  events: CalendarEvent[];
+  loaded: boolean;
+  error: Error | null;
+}
+
+const initialEvents: EventsSnapshot = { events: [], loaded: false, error: null };
+
 /**
  * Realtime store of one household (NFR-03): the household document, its members, tasks and
- * shopping list (with the purchase history).
+ * shopping list (with the purchase history) and calendar events.
  * Mount it with `key={householdId}`, so a change of household tears down all listeners.
  * `loading` (which gates the shell) waits only for household and members; the task list has
  * its own loading and error state, so it never blocks the shell (Phase 3 D13, D14); so has the
- * shopping list (Phase 5 D38, D39). A failing itemStats listener only means no suggestions,
- * so its error is ignored. Later phases add events and activity here.
+ * shopping list (Phase 5 D38, D39) and the calendar (Phase 6 D49, D50; all events, B10). A
+ * failing itemStats listener only means no suggestions, so its error is ignored. Phase 8 adds
+ * activity here.
  */
 export function HouseholdProvider({
   householdId,
@@ -64,6 +74,8 @@ export function HouseholdProvider({
   const [itemsSnapshot, setItemsSnapshot] = useState<ItemsSnapshot>(initialItems);
   const [itemsAttempt, setItemsAttempt] = useState(0);
   const [itemStats, setItemStats] = useState<ItemStat[]>([]);
+  const [eventsSnapshot, setEventsSnapshot] = useState<EventsSnapshot>(initialEvents);
+  const [eventsAttempt, setEventsAttempt] = useState(0);
 
   useEffect(() => {
     const fail = (error: Error) => setSnapshot((current) => ({ ...current, error }));
@@ -119,6 +131,16 @@ export function HouseholdProvider({
     [householdId, itemsAttempt],
   );
 
+  useEffect(
+    () =>
+      listenToEvents(
+        householdId,
+        (events) => setEventsSnapshot({ events, loaded: true, error: null }),
+        (error) => setEventsSnapshot((current) => ({ ...current, error })),
+      ),
+    [householdId, eventsAttempt],
+  );
+
   const retry = useCallback(() => {
     setSnapshot(initial);
     setAttempt((count) => count + 1);
@@ -132,6 +154,11 @@ export function HouseholdProvider({
   const retryItems = useCallback(() => {
     setItemsSnapshot(initialItems);
     setItemsAttempt((count) => count + 1);
+  }, []);
+
+  const retryEvents = useCallback(() => {
+    setEventsSnapshot(initialEvents);
+    setEventsAttempt((count) => count + 1);
   }, []);
 
   const value = useMemo<HouseholdContextValue>(() => {
@@ -155,8 +182,23 @@ export function HouseholdProvider({
       itemsError: itemsSnapshot.error,
       retryItems,
       itemStats,
+      events: eventsSnapshot.events,
+      eventsLoading: !eventsSnapshot.loaded && !eventsSnapshot.error,
+      eventsError: eventsSnapshot.error,
+      retryEvents,
     };
-  }, [snapshot, tasksSnapshot, itemsSnapshot, itemStats, uid, retry, retryTasks, retryItems]);
+  }, [
+    snapshot,
+    tasksSnapshot,
+    itemsSnapshot,
+    itemStats,
+    eventsSnapshot,
+    uid,
+    retry,
+    retryTasks,
+    retryItems,
+    retryEvents,
+  ]);
 
   return <HouseholdContext.Provider value={value}>{children}</HouseholdContext.Provider>;
 }

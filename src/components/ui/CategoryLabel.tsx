@@ -14,12 +14,14 @@ export type CategoryLabelProps = (
    * legend: 6 px dot + small muted label (month grid legend).
    */
   variant?: "pill" | "dot" | "legend";
+  /** Pill only: md 28 px (default) · sm 24 px with 12 px text (calendar cards and rows). */
+  size?: "md" | "sm";
   className?: string;
 };
 
 /** Category = dot or icon + label, never colour alone. */
 export function CategoryLabel(props: CategoryLabelProps) {
-  const { variant = "pill", className } = props;
+  const { variant = "pill", size = "md", className } = props;
   const style =
     props.kind === "event" ? eventCategories[props.category] : shopCategories[props.category];
   const Icon = style.icon;
@@ -48,12 +50,15 @@ export function CategoryLabel(props: CategoryLabelProps) {
   return (
     <span
       className={cx(
-        "inline-flex h-7 shrink-0 items-center gap-1.5 rounded-pill pr-2.5 pl-2 text-[13px] font-semibold whitespace-nowrap",
+        "inline-flex shrink-0 items-center rounded-pill font-semibold whitespace-nowrap",
+        size === "sm"
+          ? "h-6 gap-1.25 pr-2 pl-1.5 text-caption"
+          : "h-7 gap-1.5 pr-2.5 pl-2 text-[13px]",
         style.pill,
         className,
       )}
     >
-      <Icon aria-hidden="true" className={cx("size-4", style.main)} />
+      <Icon aria-hidden="true" className={cx(size === "sm" ? "size-3.5" : "size-4", style.main)} />
       {style.label}
     </span>
   );

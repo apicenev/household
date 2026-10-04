@@ -6,6 +6,14 @@ export type {
   NewActivityInput,
 } from "./ActivityEntry";
 export type {
+  CalendarEvent,
+  EventCategory,
+  EventChanges,
+  EventOccurrence,
+  EventParticipants,
+  NewEventInput,
+} from "./Event";
+export type {
   Household,
   HouseholdSettingsUpdate,
   Invite,

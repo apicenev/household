@@ -10,7 +10,14 @@ import {
   type Firestore,
 } from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Household, ItemStat, ShoppingItem, Task, UserProfile } from "../../types";
+import type {
+  CalendarEvent,
+  Household,
+  ItemStat,
+  ShoppingItem,
+  Task,
+  UserProfile,
+} from "../../types";
 import {
   DAY_MS,
   anna,
@@ -60,6 +67,10 @@ const {
   restoreItems,
   uncheckItem,
 } = await import("../../services/shoppingService");
+const { createEvent, deleteEvent, listenToEvents, updateEvent } =
+  await import("../../services/eventService");
+const { allDayToStored } = await import("../../domain/eventTime");
+const { normalizeParticipants } = await import("../../domain/calendar");
 
 let env: RulesTestEnvironment;
 
@@ -609,5 +620,102 @@ describe("shopping services against the rules (Phase 5)", () => {
     ).resolves.toBeUndefined();
     await vi.waitFor(() => expect(live.items[0].checked).toBe(false));
     stop();
+  });
+});
+
+describe("event services against the rules (Phase 6)", () => {
+  const hid = "h1";
+
+  beforeEach(async () => {
+    await seedHousehold(env, { members: [anna] });
+  });
+
+  /** Live events as Anna's provider would see them. */
+  function watch() {
+    const live = { events: [] as CalendarEvent[] };
+    signInAs(anna);
+    const stop = listenToEvents(
+      hid,
+      (events) => (live.events = events),
+      (error) => {
+        throw error;
+      },
+    );
+    return { live, stop };
+  }
+
+  it("create → activity → edit → delete; the other member sees it live (B12)", async () => {
+    const { live, stop } = watch();
+
+    signInAs(nevio);
+    const { id, committed } = createEvent(
+      hid,
+      {
+        title: " Ferien ",
+        description: "Lissabon.",
+        category: "travel",
+        allDay: true,
+        ...allDayToStored("2026-10-14", "2026-10-21"),
+        participants: "household",
+      },
+      "nevio",
+    );
+    await committed;
+    await vi.waitFor(() => expect(live.events.map((e) => e.title)).toEqual(["Ferien"]));
+    expect(live.events[0]).toMatchObject({ id, allDay: true, createdBy: "nevio" });
+    expect(live.events[0].start.toISOString()).toBe("2026-10-14T00:00:00.000Z");
+
+    signInAs(anna);
+    await updateEvent(hid, id, { description: null, participants: ["anna"] });
+    await vi.waitFor(() => expect(live.events[0].participants).toEqual(["anna"]));
+    expect(live.events[0].description).toBeUndefined();
+
+    await deleteEvent(hid, id);
+    await vi.waitFor(() => expect(live.events).toEqual([]));
+    stop();
+
+    const entries: Record<string, unknown>[] = [];
+    await asAdmin(env, async (db) => {
+      const snapshot = await getDocs(collection(db, "households", hid, "activity"));
+      entries.push(...snapshot.docs.map((d) => d.data()));
+    });
+    expect(entries).toEqual([
+      expect.objectContaining({
+        type: "event_created",
+        targetType: "event",
+        targetId: id,
+        targetTitle: "Ferien",
+        actorId: "nevio",
+      }),
+    ]);
+  });
+
+  it("an edit that still lists a former member is denied; normalized participants pass (B5)", async () => {
+    await asAdmin(env, async (db) => {
+      const now = new Date();
+      await setDoc(doc(db, "households", hid, "events", "doctor"), {
+        title: "Arzttermin",
+        category: "appointment",
+        allDay: false,
+        start: new Date("2026-10-06T06:15:00Z"),
+        end: new Date("2026-10-06T07:00:00Z"),
+        participants: ["anna", "gone"],
+        createdBy: "anna",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    signInAs(nevio);
+    await expect(updateEvent(hid, "doctor", { title: "Arzt" })).rejects.toThrow();
+    // normalizeParticipants only reads the uids.
+    const members = [{ uid: "nevio" }, { uid: "anna" }] as unknown as Parameters<
+      typeof normalizeParticipants
+    >[1];
+    await expect(
+      updateEvent(hid, "doctor", {
+        title: "Arzt",
+        participants: normalizeParticipants(["anna", "gone"], members),
+      }),
+    ).resolves.toBeUndefined();
   });
 });

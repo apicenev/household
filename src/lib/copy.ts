@@ -300,3 +300,80 @@ export const recurrenceCopy = {
   orderLabel: "Reihenfolge beim Abwechseln",
   orderHelper: "Neue abwechselnde Aufgaben starten in dieser Reihenfolge.",
 } as const;
+
+const listFormat = (names: readonly string[]) =>
+  new Intl.ListFormat("de-CH", { type: "conjunction" }).format(names);
+
+/** Calendar wording (Phase 6): `Calendar`, Termin-Sheet, Termin-Detail, D45–D58. */
+export const calendarCopy = {
+  month: "Monat",
+  upcoming: terms.upcoming,
+  viewLabel: "Ansicht",
+  today: terms.today,
+  prevMonth: "Vorheriger Monat",
+  nextMonth: "Nächster Monat",
+  selectedDay: "Ausgewählter Tag",
+  newEvent: "Neuer Termin",
+  editEvent: "Termin bearbeiten",
+  addEvent: "Termin hinzufügen",
+  deleteEvent: "Termin löschen",
+  /** Schnellerfassung CTA. */
+  saveQuick: "Termin speichern",
+  quickAddPlaceholder: "Was steht an?",
+  moreOptions: "Mehr Optionen",
+  nothingPlanned: "Nichts geplant",
+  /** D51 */
+  upcomingEmptyText: "In den nächsten 60 Tagen steht nichts an.",
+  /** D50 */
+  loadError: "Kalender konnte nicht geladen werden.",
+  /** D52 */
+  deletedElsewhere: "Dieser Termin wurde gelöscht.",
+  back: areas.calendar,
+  title: "Titel",
+  allDay: terms.allDay,
+  start: "Beginn",
+  end: "Ende",
+  date: "Datum",
+  time: "Uhrzeit",
+  participants: "Für",
+  everyone: terms.everyone,
+  category: "Kategorie",
+  description: "Beschreibung",
+  noRepeat: "Wiederholt sich nicht",
+  titleEmpty: "Gib einen Titel ein.",
+  titleTooLong: "Der Titel darf höchstens 200 Zeichen lang sein.",
+  descriptionTooLong: "Die Beschreibung darf höchstens 2000 Zeichen lang sein.",
+  /** D48 */
+  endBeforeStart: "Das Ende darf nicht vor dem Beginn liegen.",
+  tooLong: "Ein Termin darf höchstens 366 Tage dauern.",
+  /** «Beginn, Datum» / «Ende, Uhrzeit» for the D48 pills. */
+  pickerLabel: (row: string, part: string) => `${row}, ${part}`,
+  /** «1 Termin» / «2 Termine» */
+  eventCount: (count: number) => `${count} ${count === 1 ? "Termin" : "Termine"}`,
+  /** «Tag 3 von 8» (D54) */
+  dayOf: (day: number, of: number) => `Tag ${day} von ${of}`,
+  /** «8 Tage» / «1 Tag» */
+  days: (count: number) => `${count} ${count === 1 ? "Tag" : "Tage"}`,
+  /** D55: «bis Sa.» / «bis 02:00» */
+  until: (label: string) => `bis ${label}`,
+  /** Desktop cell overflow «+2 weitere» (B7). */
+  more: (count: number) => `+${count} weitere`,
+  /** Day cell: «Sa., 3. Okt., heute, 2 Termine» / «…, keine Termine» (D57). */
+  cellLabel: (date: string, isToday: boolean, count: number) =>
+    [
+      date,
+      ...(isToday ? ["heute"] : []),
+      count === 0 ? "keine Termine" : `${count} ${count === 1 ? "Termin" : "Termine"}`,
+    ].join(", "),
+  /** Detail and card lines joined with « · ». */
+  meta: (...parts: readonly string[]) => parts.filter(Boolean).join(" · "),
+  /** D53 */
+  deleteTitle: (title: string) => `«${title}» löschen?`,
+  deleteText: (names: readonly string[]) =>
+    names.length < 2
+      ? "Der Termin wird gelöscht."
+      : `Der Termin verschwindet für ${listFormat(names)}.`,
+  deletedToast: (title: string) => `«${title}» gelöscht`,
+  /** Schnellerfassung status line (D56). */
+  addedStatus: (title: string) => `«${title}» zum Kalender hinzugefügt`,
+} as const;
