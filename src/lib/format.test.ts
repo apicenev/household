@@ -4,9 +4,13 @@ import {
   completedLabel,
   dueLabel,
   formatDate,
+  formatDateRange,
+  formatDayMonth,
   formatLongDate,
+  formatMonthYear,
   formatNumber,
   formatNumericDate,
+  formatShortRange,
   formatTime,
   formatTimeRange,
   quickPickDates,
@@ -165,5 +169,37 @@ describe("completedLabel", () => {
   it("uses the calendar day of the household time zone", () => {
     // 22:30 UTC on 29 Sept is already 30 Sept in Zurich.
     expect(completedLabel(utc("2026-09-29T22:30:00Z"), now)).toBe("Heute");
+  });
+});
+
+describe("calendar formats (Phase 6)", () => {
+  const key = (k: string) => new Date(`${k}T12:00:00Z`);
+
+  it("formats the month header «Oktober 2026» / «März 2026»", () => {
+    expect(formatMonthYear("2026-10")).toBe("Oktober 2026");
+    expect(formatMonthYear("2026-03")).toBe("März 2026");
+  });
+
+  it("formats «3. Okt.» and «30. Sept.»", () => {
+    expect(formatDayMonth(key("2026-10-03"))).toBe("3. Okt.");
+    expect(formatDayMonth(key("2026-09-30"))).toBe("30. Sept.");
+  });
+
+  it("formats a range of days within a month, across months and across years", () => {
+    expect(formatDateRange(key("2026-10-14"), key("2026-10-21"))).toBe("Mi., 14. – Mi., 21. Okt.");
+    expect(formatDateRange(key("2026-09-30"), key("2026-10-02"))).toBe(
+      "Mi., 30. Sept. – Fr., 2. Okt.",
+    );
+    expect(formatDateRange(key("2026-12-30"), key("2027-01-01"))).toBe(
+      "Mi., 30. Dez. 2026 – Fr., 1. Jan. 2027",
+    );
+  });
+
+  it("formats the short range for «Demnächst»", () => {
+    expect(formatShortRange(key("2026-10-14"), key("2026-10-21"))).toBe("14.–21. Okt.");
+    expect(formatShortRange(key("2026-09-30"), key("2026-10-02"))).toBe("30. Sept. – 2. Okt.");
+    expect(formatShortRange(key("2026-12-30"), key("2027-01-02"))).toBe(
+      "30. Dez. 2026 – 2. Jan. 2027",
+    );
   });
 });

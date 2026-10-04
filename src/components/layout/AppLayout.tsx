@@ -15,7 +15,8 @@ import { areaForPath } from "./navigation";
  * Signed-in shell. Below lg: top bar + content + tab bar. From lg: 272 px sidebar + content
  * column (max 1080 px). Hosts the offline banner and the Schnellerfassung.
  * Haushalt (reached from the account menu) has a back button and no tab bar on phones, as in
- * `Household.dc.html`.
+ * `Household.dc.html`. The Termin-Detail (`/calendar?event=…`, Phase 6 D45) brings its own
+ * header and has no tab bar either; on desktop the calendar turns `?event=` into a selection.
  */
 export function AppLayout({ children }: { children?: ReactNode }) {
   const location = useLocation();
@@ -24,7 +25,8 @@ export function AppLayout({ children }: { children?: ReactNode }) {
   const area = areaForPath(location.pathname);
   // Start shows the brand in the mobile header (Dashboard.dc.html); other areas their name.
   const title = area && area.key !== "dashboard" ? area.label : undefined;
-  const pushed = area?.key === "household";
+  const eventDetail = area?.key === "calendar" && new URLSearchParams(location.search).has("event");
+  const pushed = area?.key === "household" || eventDetail;
   const { household, items, itemsLoading, itemsError } = useHousehold();
   // Einkauf: «4 offen» / «Alles erledigt» next to the title (B13).
   const subtitle =
@@ -42,7 +44,7 @@ export function AppLayout({ children }: { children?: ReactNode }) {
     <div className="min-h-dvh bg-canvas text-ink lg:flex">
       <Sidebar onQuickAdd={() => setQuickAddOpen(true)} className="hidden lg:flex" />
       <div className="flex min-h-dvh min-w-0 flex-1 flex-col">
-        {pushed && area ? (
+        {eventDetail ? null : pushed && area ? (
           <TopBar variant="back" title={area.label} onBack={goBack} className="lg:hidden" />
         ) : (
           <TopBar title={title} subtitle={subtitle} className="lg:hidden" />
@@ -50,9 +52,12 @@ export function AppLayout({ children }: { children?: ReactNode }) {
         <main
           className={cx(
             "flex flex-1 flex-col px-4 pt-2 lg:px-12 lg:pt-10 lg:pb-12",
-            pushed
-              ? "pb-[calc(env(safe-area-inset-bottom)+--spacing(12))]"
-              : "pb-[calc(var(--tabbar-height)+env(safe-area-inset-bottom)+--spacing(6))]",
+            // The Termin-Detail ends in its own action bar at the screen edge.
+            eventDetail
+              ? "pb-0"
+              : pushed
+                ? "pb-[calc(env(safe-area-inset-bottom)+--spacing(12))]"
+                : "pb-[calc(var(--tabbar-height)+env(safe-area-inset-bottom)+--spacing(6))]",
           )}
         >
           <div className="mx-auto flex w-full max-w-270 flex-1 flex-col gap-6">

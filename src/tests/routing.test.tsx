@@ -21,6 +21,9 @@ vi.mock("../services/taskService", () =>
 vi.mock("../services/shoppingService", () =>
   import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
 );
+vi.mock("../services/eventService", () =>
+  import("./householdFakes").then((fakes) => fakes.eventServiceMock),
+);
 
 const nevio: AuthUser = { uid: "nevio", email: "nevio@example.ch" };
 
@@ -332,7 +335,7 @@ describe("app shell", () => {
     expect(within(sidebar).getByRole("link", { name: "Haushalt" })).toBeInTheDocument();
   });
 
-  it("opens the Schnellerfassung from the + (Aufgabe, Einkauf; Termin «Bald verfügbar»)", async () => {
+  it("opens the Schnellerfassung from the + (Aufgabe, Einkauf, Termin)", async () => {
     renderApp("/dashboard", signedIn);
     await userEvent.click(await screen.findByRole("button", { name: "Schnellerfassung" }));
     const sheet = screen.getByRole("dialog", { name: "Schnellerfassung" });
@@ -340,8 +343,8 @@ describe("app shell", () => {
     await userEvent.click(within(sheet).getByRole("radio", { name: "Einkauf" }));
     expect(within(sheet).getByRole("textbox", { name: "Was braucht ihr?" })).toBeInTheDocument();
     await userEvent.click(within(sheet).getByRole("radio", { name: "Termin" }));
-    expect(within(sheet).getByRole("heading", { name: "Termin" })).toBeInTheDocument();
-    expect(within(sheet).getByText("Kommt bald.")).toBeInTheDocument();
+    expect(within(sheet).getByRole("textbox", { name: "Was steht an?" })).toBeInTheDocument();
+    expect(within(sheet).queryByText("Kommt bald.")).not.toBeInTheDocument();
   });
 
   it("opens the Schnellerfassung from the sidebar «Neu»", async () => {

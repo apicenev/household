@@ -26,6 +26,9 @@ vi.mock("../services/taskService", () =>
 vi.mock("../services/shoppingService", () =>
   import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
 );
+vi.mock("../services/eventService", () =>
+  import("./householdFakes").then((fakes) => fakes.eventServiceMock),
+);
 const invites = vi.hoisted(() => ({ regenerateInvite: vi.fn() }));
 vi.mock("../services/inviteService", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../services/inviteService")>()),
@@ -137,7 +140,10 @@ describe("Haushalt page", () => {
     expect(within(header).getByText("Haushalt")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Schnellerfassung" })).not.toBeInTheDocument();
     await userEvent.click(within(header).getByRole("button", { name: "Zurück" }));
-    expect(await screen.findByRole("heading", { name: "Aufgaben", level: 1 })).toBeInTheDocument();
+    // Aufgaben is lazy-loaded; same timeout as the other page helpers.
+    expect(
+      await screen.findByRole("heading", { name: "Aufgaben", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
   });
 
   it("goes back to Start when opened directly (B12)", async () => {

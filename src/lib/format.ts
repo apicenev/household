@@ -16,8 +16,53 @@ function fmt(date: Date, pattern: string, timeZone: string): string {
 
 /** «Sa., 3. Okt.» */
 export function formatDate(date: Date, timeZone = DEFAULT_TIME_ZONE): string {
-  // date-fns abbreviates September as «Sep.»; the design uses «Sept.».
-  return fmt(date, "EEE, d. MMM", timeZone).replace(/\bSep\./, "Sept.");
+  return fixSeptember(fmt(date, "EEE, d. MMM", timeZone));
+}
+
+/** date-fns abbreviates September as «Sep.»; the design uses «Sept.». */
+function fixSeptember(text: string): string {
+  return text.replace(/\bSep\./, "Sept.");
+}
+
+/** «3. Okt.» */
+export function formatDayMonth(date: Date, timeZone = DEFAULT_TIME_ZONE): string {
+  return fixSeptember(fmt(date, "d. MMM", timeZone));
+}
+
+/** «Oktober 2026» for a month «2026-10». */
+export function formatMonthYear(month: string): string {
+  return fmt(fromDateKey(`${month}-01`), "MMMM yyyy", "UTC");
+}
+
+/**
+ * A range of days for the detail and the expanded card: «Mi., 14. – Mi., 21. Okt.», across
+ * months «Mi., 30. Sept. – Fr., 2. Okt.», across years «Mi., 30. Dez. 2026 – Fr., 1. Jan. 2027».
+ * All-day events pass `fromDateKey(key)` (Phase 6 B2).
+ */
+export function formatDateRange(start: Date, end: Date, timeZone = DEFAULT_TIME_ZONE): string {
+  const [startYear, endYear] = [fmt(start, "yyyy", timeZone), fmt(end, "yyyy", timeZone)];
+  if (startYear !== endYear) {
+    return `${formatDate(start, timeZone)} ${startYear} – ${formatDate(end, timeZone)} ${endYear}`;
+  }
+  if (fmt(start, "MM", timeZone) !== fmt(end, "MM", timeZone)) {
+    return `${formatDate(start, timeZone)} – ${formatDate(end, timeZone)}`;
+  }
+  return `${fmt(start, "EEE, d.", timeZone)} – ${formatDate(end, timeZone)}`;
+}
+
+/**
+ * Short range of days for «Demnächst»: «14.–21. Okt.», across months «30. Sept. – 2. Okt.»,
+ * across years «30. Dez. 2026 – 2. Jan. 2027».
+ */
+export function formatShortRange(start: Date, end: Date, timeZone = DEFAULT_TIME_ZONE): string {
+  const [startYear, endYear] = [fmt(start, "yyyy", timeZone), fmt(end, "yyyy", timeZone)];
+  if (startYear !== endYear) {
+    return `${formatDayMonth(start, timeZone)} ${startYear} – ${formatDayMonth(end, timeZone)} ${endYear}`;
+  }
+  if (fmt(start, "MM", timeZone) !== fmt(end, "MM", timeZone)) {
+    return `${formatDayMonth(start, timeZone)} – ${formatDayMonth(end, timeZone)}`;
+  }
+  return `${fmt(start, "d.", timeZone)}–${formatDayMonth(end, timeZone)}`;
 }
 
 /** «Mittwoch, 30. September» */

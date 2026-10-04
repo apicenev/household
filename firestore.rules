@@ -13,7 +13,8 @@ rules_version = '2';
 //   households/{hid}/tasks             members CRUD, validated                (Phases 3, 4)
 //   households/{hid}/shoppingItems     members CRUD, validated                (Phase 5)
 //   households/{hid}/itemStats         members create / count ±1, no delete   (Phase 5)
-//   households/{hid}/events                                                   (Phases 6, 7)
+//   households/{hid}/events            members CRUD, validated                (Phase 6;
+//                                      recurrence: Phase 7)
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
@@ -609,6 +610,80 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // events/{eventId} (Phase 6 B1–B3, B5, B13): any member creates, edits and deletes.
+      // Every write is checked as a whole event, so an edit that still lists a former member
+      // is rejected (the client drops them, B5). Timed events store instants; all-day events
+      // floating dates at 00:00 UTC with an inclusive end (B2). Recurrence arrives in Phase 7.
+      match /events/{eventId} {
+        function validEventTitle(value) {
+          return value is string && value.size() >= 1 && value.size() <= 200
+            && value.trim() == value;
+        }
+
+        function validEventCategory(value) {
+          return value in ['social', 'appointment', 'travel', 'home', 'reminder', 'other'];
+        }
+
+        // «household», or 1–20 distinct uids of current members.
+        function validParticipants(value) {
+          return value == 'household'
+            || (value is list
+              && value.size() >= 1 && value.size() <= 20
+              && value.toSet().size() == value.size()
+              && value.hasOnly(get(householdPath(hid)).data.memberIds));
+        }
+
+        // CAL-05, B3: end ≥ start; at most 366 calendar days, i.e. 366 days between the
+        // instants of a timed event and 365 between the first and last day of an all-day one.
+        function validEventTimes(data) {
+          let dayMs = 86400000;
+          let length = data.end.toMillis() - data.start.toMillis();
+          return data.start is timestamp && data.end is timestamp
+            && length >= 0
+            && ((data.allDay == false && length <= 366 * dayMs)
+              || (data.allDay == true
+                && data.start.toMillis() % dayMs == 0
+                && data.end.toMillis() % dayMs == 0
+                && length <= 365 * dayMs));
+        }
+
+        function validEventData(data) {
+          return data.keys().hasOnly(['title', 'description', 'category', 'allDay', 'start',
+                                      'end', 'participants', 'createdBy', 'createdAt',
+                                      'updatedAt'])
+            && data.keys().hasAll(['title', 'category', 'allDay', 'start', 'end',
+                                   'participants', 'createdBy', 'createdAt', 'updatedAt'])
+            && validEventTitle(data.title)
+            && (!('description' in data)
+              || (data.description is string
+                && data.description.size() >= 1 && data.description.size() <= 2000))
+            && validEventCategory(data.category)
+            && data.allDay is bool
+            && validEventTimes(data)
+            && validParticipants(data.participants)
+            && data.updatedAt == request.time;
+        }
+
+        function validNewEvent() {
+          let data = request.resource.data;
+          return validEventData(data)
+            && data.createdBy == request.auth.uid
+            && data.createdAt == request.time;
+        }
+
+        function isEventEdit() {
+          let data = request.resource.data;
+          return validEventData(data)
+            && data.createdBy == resource.data.createdBy
+            && data.createdAt == resource.data.createdAt;
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isMember(hid) && validNewEvent();
+        allow update: if isMember(hid) && isEventEdit();
+        allow delete: if isMember(hid);
+      }
+
       // activity/{id}: append-only (ACT-06).
       match /activity/{activityId} {
         function taskPath(taskId) {
@@ -663,6 +738,22 @@ service cloud.firestore {
             && !('details' in data);
         }
 
+        function eventPath(eventId) {
+          return /databases/$(database)/documents/households/$(hid)/events/$(eventId);
+        }
+
+        // Calendar entries (Phase 6 B12): «event_created» in the same batch as the event,
+        // whose title after the batch is the snapshot.
+        function validEventActivity(data) {
+          let event = eventPath(data.targetId);
+          return data.type == 'event_created'
+            && data.targetType == 'event'
+            && isMember(hid)
+            && existsAfter(event)
+            && getAfter(event).data.title == data.targetTitle
+            && !('details' in data);
+        }
+
         function validMemberJoined(data) {
           let uid = request.auth.uid;
           return data.type == 'member_joined'
@@ -685,7 +776,8 @@ service cloud.firestore {
             && data.targetType is string
             && data.targetId is string
             && data.targetTitle is string
-            && (validMemberJoined(data) || validTaskActivity(data) || validItemActivity(data));
+            && (validMemberJoined(data) || validTaskActivity(data) || validItemActivity(data)
+              || validEventActivity(data));
         }
 
         allow get, list: if isMember(hid);

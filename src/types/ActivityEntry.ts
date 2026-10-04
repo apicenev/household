@@ -1,13 +1,14 @@
-/** Kinds of activity entries (ACT-01). Phase 6 adds event types. */
+/** Kinds of activity entries (ACT-01). */
 export type ActivityType =
   | "member_joined"
   | "task_created"
   | "task_completed"
   | "task_assigned"
   | "item_added"
-  | "item_purchased";
+  | "item_purchased"
+  | "event_created";
 
-export type ActivityTargetType = "member" | "task" | "item";
+export type ActivityTargetType = "member" | "task" | "item" | "event";
 
 /** households/{hid}/activity/{id}: append-only (ACT-02, ACT-06). */
 export interface ActivityEntry {
