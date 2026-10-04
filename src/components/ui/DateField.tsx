@@ -23,6 +23,8 @@ export interface DateFieldProps {
   quickPicks?: boolean;
   /** Adds an «Ohne Datum» chip after the quick picks (clears the date; task sheet). */
   noDatePick?: boolean;
+  /** Disables the «Ohne Datum» chip (a recurring task needs a date, Phase 4 D26). */
+  noDateDisabled?: boolean;
   /** Injectable for tests. */
   today?: Date;
   timeZone?: string;
@@ -46,6 +48,7 @@ export function DateField({
   clearable = true,
   quickPicks = false,
   noDatePick = false,
+  noDateDisabled = false,
   today = new Date(),
   timeZone = DEFAULT_TIME_ZONE,
   className,
@@ -125,7 +128,7 @@ export function DateField({
               <button
                 key={pick.label}
                 type="button"
-                disabled={disabled}
+                disabled={disabled || (noDateDisabled && pick.key === "")}
                 aria-pressed={selected}
                 aria-label={pick.ariaLabel}
                 onClick={() => onChange(pick.key)}

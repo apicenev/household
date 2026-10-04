@@ -6,8 +6,15 @@ export interface TaskActions {
   create: (input: NewTaskInput) => string;
   update: (task: Task, changes: TaskChanges) => void;
   complete: (task: Task) => void;
+  /** Toast text after a completion: «Bad putzen» erledigt, with the D29 note if it repeats. */
+  completedMessage: (task: Task) => string;
+  /** Reopens; a completed occurrence takes back its untouched successor (RTK-10, B9). */
   reopen: (task: Task) => void;
   remove: (task: Task) => void;
+  /** «Nur diese» (RTK-08, B8): deletes the occurrence, the next one is created. */
+  removeOccurrence: (task: Task) => void;
+  /** «Ganze Serie» (RTK-08): deletes the open occurrence; completed ones stay. */
+  removeSeries: (task: Task) => void;
 }
 
 export interface OpenNewTaskOptions {
@@ -15,6 +22,8 @@ export interface OpenNewTaskOptions {
   prefill?: Partial<NewTaskInput>;
   /** Called with the new id after «Aufgabe hinzufügen» (desktop selection, D19). */
   onCreated?: (id: string) => void;
+  /** Opens with «Wiederholen» focused (Schnellerfassung chip, Phase 4 D31). */
+  focusRepeat?: boolean;
 }
 
 export interface TaskContextValue {
@@ -23,7 +32,7 @@ export interface TaskContextValue {
   openNewTask: (options?: OpenNewTaskOptions) => void;
   /** Opens «Aufgabe bearbeiten» for an open task. */
   openEditTask: (taskId: string) => void;
-  /** Opens the delete confirmation (D22). */
+  /** Opens the delete confirmation (D22), for a recurring task with «Nur diese / Ganze Serie». */
   confirmDelete: (task: Task, onDeleted?: () => void) => void;
 }
 

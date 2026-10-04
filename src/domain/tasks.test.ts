@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "../types";
 import {
+  buildNextOccurrence,
   changedTaskFields,
   compareTasks,
   daysBetweenKeys,
@@ -11,8 +12,11 @@ import {
   hasFilters,
   isDueToday,
   isOverdue,
+  isRecurring,
   isUnassigned,
+  isUntouched,
   isWriteOutcomeReached,
+  nextOccurrenceId,
   normalizeTaskInput,
   openTaskCount,
   orderedOpenTasks,
@@ -404,5 +408,147 @@ describe("isWriteOutcomeReached (D21)", () => {
     expect(isWriteOutcomeReached(task(), "delete")).toBe(false);
     expect(isWriteOutcomeReached(task(), "edit")).toBe(false);
     expect(isWriteOutcomeReached(undefined, "create")).toBe(false);
+  });
+});
+
+describe("recurring tasks (Phase 4)", () => {
+  const weeklySat = { freq: "weekly" as const, interval: 1, byWeekday: [6] };
+  const bathroom = (overrides: Partial<Task> = {}) =>
+    task({
+      id: "s1",
+      title: "Bad putzen",
+      notes: "Spiegel",
+      assigneeId: "nevio",
+      dueDate: "2026-10-03",
+      priority: "medium",
+      recurrence: weeklySat,
+      rotation: { memberIds: ["nevio", "anna"], index: 0 },
+      seriesId: "s1",
+      seriesIndex: 1,
+      ...overrides,
+    });
+  const recurrenceCtx = {
+    today: "2026-10-04",
+    weekStartsOn: 1 as const,
+    memberIds: ["nevio", "anna"],
+  };
+
+  it("isRecurring: open with a rule; a completed occurrence keeps its rule but doesn't count (B7)", () => {
+    expect(isRecurring(bathroom())).toBe(true);
+    expect(isRecurring(bathroom({ status: "done" }))).toBe(false);
+    expect(isRecurring(task())).toBe(false);
+  });
+
+  it("nextOccurrenceId: «{seriesId}-{n+1}» (B5)", () => {
+    expect(nextOccurrenceId(bathroom())).toBe("s1-2");
+    expect(nextOccurrenceId(bathroom({ seriesId: "s1", seriesIndex: 4 }))).toBe("s1-5");
+    expect(nextOccurrenceId(task())).toBeUndefined();
+  });
+
+  it("buildNextOccurrence on completion: next date, next assignee, same fields (acceptance criterion)", () => {
+    expect(buildNextOccurrence(bathroom(), recurrenceCtx, { advanceRotation: true })).toEqual({
+      id: "s1-2",
+      title: "Bad putzen",
+      notes: "Spiegel",
+      assigneeId: "anna",
+      dueDate: "2026-10-10",
+      priority: "medium",
+      recurrence: weeklySat,
+      rotation: { memberIds: ["nevio", "anna"], index: 1 },
+      seriesId: "s1",
+      seriesIndex: 2,
+    });
+  });
+
+  it("«Nur diese» keeps the assignee (B8)", () => {
+    const next = buildNextOccurrence(bathroom(), recurrenceCtx, { advanceRotation: false });
+    expect(next.assigneeId).toBe("nevio");
+    expect(next.rotation).toEqual({ memberIds: ["nevio", "anna"], index: 0 });
+  });
+
+  it("without rotation keeps the assignee, unless they left", () => {
+    const plain = bathroom({ rotation: undefined, notes: undefined });
+    const next = buildNextOccurrence(plain, recurrenceCtx, { advanceRotation: true });
+    expect(next.assigneeId).toBe("nevio");
+    expect(next).not.toHaveProperty("rotation");
+    expect(next).not.toHaveProperty("notes");
+    const left = buildNextOccurrence(
+      plain,
+      { ...recurrenceCtx, memberIds: ["anna"] },
+      {
+        advanceRotation: true,
+      },
+    );
+    expect(left.assigneeId).toBeNull();
+  });
+
+  it("a rotation with one member left ends", () => {
+    const next = buildNextOccurrence(
+      bathroom(),
+      { ...recurrenceCtx, memberIds: ["nevio"] },
+      {
+        advanceRotation: true,
+      },
+    );
+    expect(next.assigneeId).toBe("nevio");
+    expect(next).not.toHaveProperty("rotation");
+  });
+
+  it("throws for a task that doesn't repeat", () => {
+    expect(() => buildNextOccurrence(task(), recurrenceCtx, { advanceRotation: true })).toThrow();
+  });
+
+  it("isUntouched: open and never edited (B9)", () => {
+    const created = new Date("2026-10-04T10:00:00Z");
+    expect(isUntouched(bathroom({ createdAt: created, updatedAt: created }))).toBe(true);
+    expect(
+      isUntouched(bathroom({ createdAt: created, updatedAt: new Date("2026-10-04T11:00:00Z") })),
+    ).toBe(false);
+    expect(isUntouched(bathroom({ createdAt: created, updatedAt: created, status: "done" }))).toBe(
+      false,
+    );
+  });
+
+  it("changedTaskFields writes rule and rotation only when they change (B4)", () => {
+    const before = bathroom();
+    const same = {
+      title: before.title,
+      notes: before.notes,
+      assigneeId: before.assigneeId,
+      dueDate: before.dueDate,
+      priority: before.priority,
+      recurrence: { freq: "weekly" as const, interval: 1, byWeekday: [6] },
+      rotation: { memberIds: ["anna", "nevio"], index: 1 },
+    };
+    expect(changedTaskFields(before, same)).toEqual({});
+    expect(
+      changedTaskFields(before, { ...same, recurrence: undefined, rotation: undefined }),
+    ).toEqual({
+      recurrence: null,
+      rotation: null,
+    });
+    expect(
+      changedTaskFields(before, {
+        ...same,
+        assigneeId: "anna",
+        rotation: { memberIds: ["anna", "nevio"], index: 0 },
+      }),
+    ).toEqual({ assigneeId: "anna", rotation: { memberIds: ["anna", "nevio"], index: 0 } });
+  });
+
+  it("normalizeTaskInput keeps a rule and drops a rotation without one", () => {
+    const input = {
+      title: "Bad",
+      assigneeId: "nevio",
+      dueDate: "2026-10-03",
+      priority: "low" as const,
+    };
+    const rotation = { memberIds: ["nevio", "anna"], index: 0 };
+    expect(normalizeTaskInput({ ...input, rotation })).toEqual(input);
+    expect(normalizeTaskInput({ ...input, recurrence: weeklySat, rotation })).toEqual({
+      ...input,
+      recurrence: weeklySat,
+      rotation,
+    });
   });
 });

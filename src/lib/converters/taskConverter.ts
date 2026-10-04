@@ -5,7 +5,7 @@ import {
   type QueryDocumentSnapshot,
   type SnapshotOptions,
 } from "firebase/firestore";
-import type { Task, TaskPriority, TaskStatus } from "../../types";
+import type { RecurrenceRule, Task, TaskPriority, TaskRotation, TaskStatus } from "../../types";
 import { toDate } from "./userProfileConverter";
 
 /** Firestore shape of households/{hid}/tasks/{taskId}. */
@@ -18,9 +18,28 @@ export interface TaskDoc {
   status: TaskStatus;
   completedAt?: Timestamp;
   completedBy?: string;
+  seriesId?: string;
+  seriesIndex?: number;
+  recurrence?: RecurrenceRule;
+  rotation?: TaskRotation;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
+}
+
+/** Only the keys a rule has (Phase 4 B3), so stray fields never reach the app. */
+function readRule(value: DocumentData | undefined): RecurrenceRule | undefined {
+  if (!value) return undefined;
+  const rule: RecurrenceRule = { freq: value.freq, interval: value.interval };
+  if (Array.isArray(value.byWeekday)) rule.byWeekday = [...value.byWeekday];
+  if (value.byMonthDay !== undefined) rule.byMonthDay = value.byMonthDay;
+  if (value.byMonth !== undefined) rule.byMonth = value.byMonth;
+  return rule;
+}
+
+function readRotation(value: DocumentData | undefined): TaskRotation | undefined {
+  if (!value || !Array.isArray(value.memberIds)) return undefined;
+  return { memberIds: [...value.memberIds], index: value.index };
 }
 
 /**
@@ -43,6 +62,10 @@ export const taskConverter: FirestoreDataConverter<Task, TaskDoc> = {
     if (t.notes !== undefined) data.notes = t.notes;
     if (t.completedAt !== undefined) data.completedAt = Timestamp.fromDate(t.completedAt);
     if (t.completedBy !== undefined) data.completedBy = t.completedBy;
+    if (t.seriesId !== undefined) data.seriesId = t.seriesId;
+    if (t.seriesIndex !== undefined) data.seriesIndex = t.seriesIndex;
+    if (t.recurrence !== undefined) data.recurrence = t.recurrence;
+    if (t.rotation !== undefined) data.rotation = t.rotation;
     return data;
   },
   fromFirestore(snapshot: QueryDocumentSnapshot<DocumentData>, options?: SnapshotOptions) {
@@ -57,6 +80,10 @@ export const taskConverter: FirestoreDataConverter<Task, TaskDoc> = {
       status: data.status as TaskStatus,
       completedAt: data.completedAt ? toDate(data.completedAt) : undefined,
       completedBy: data.completedBy ?? undefined,
+      seriesId: data.seriesId ?? undefined,
+      seriesIndex: data.seriesIndex ?? undefined,
+      recurrence: readRule(data.recurrence),
+      rotation: readRotation(data.rotation),
       createdBy: data.createdBy,
       createdAt: toDate(data.createdAt),
       updatedAt: toDate(data.updatedAt),

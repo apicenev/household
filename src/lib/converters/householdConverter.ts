@@ -17,6 +17,7 @@ export interface HouseholdDoc {
   timeZone: string;
   inviteCode: string;
   inviteCreatedAt: Timestamp;
+  rotationOrder?: string[];
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -25,7 +26,7 @@ export interface HouseholdDoc {
 export const householdConverter: FirestoreDataConverter<Household, HouseholdDoc> = {
   toFirestore(household) {
     const h = household as Household;
-    return {
+    const data: HouseholdDoc = {
       name: h.name,
       ownerId: h.ownerId,
       memberIds: h.memberIds,
@@ -35,7 +36,9 @@ export const householdConverter: FirestoreDataConverter<Household, HouseholdDoc>
       inviteCreatedAt: Timestamp.fromDate(h.inviteCreatedAt),
       createdAt: Timestamp.fromDate(h.createdAt),
       updatedAt: Timestamp.fromDate(h.updatedAt),
-    } satisfies HouseholdDoc;
+    };
+    if (h.rotationOrder !== undefined) data.rotationOrder = h.rotationOrder;
+    return data;
   },
   fromFirestore(snapshot: QueryDocumentSnapshot<DocumentData>, options?: SnapshotOptions) {
     const data = snapshot.data({ serverTimestamps: "estimate", ...options });
@@ -48,6 +51,7 @@ export const householdConverter: FirestoreDataConverter<Household, HouseholdDoc>
       timeZone: data.timeZone,
       inviteCode: data.inviteCode,
       inviteCreatedAt: toDate(data.inviteCreatedAt),
+      rotationOrder: Array.isArray(data.rotationOrder) ? [...data.rotationOrder] : undefined,
       createdAt: toDate(data.createdAt),
       updatedAt: toDate(data.updatedAt),
     };

@@ -1,9 +1,19 @@
-import { ArrowPathIcon, FlagIcon, TrashIcon } from "@heroicons/react/16/solid";
+import {
+  ArrowPathIcon,
+  ArrowRightIcon,
+  ArrowsRightLeftIcon,
+  FlagIcon,
+  TrashIcon,
+} from "@heroicons/react/16/solid";
 import { PencilIcon } from "@heroicons/react/20/solid";
-import { dueGroup } from "../../domain/tasks";
+import { Fragment } from "react";
+import { rotationOrder } from "../../domain/rotation";
+import { buildNextOccurrence, dueGroup, isRecurring } from "../../domain/tasks";
 import { actions, priorityLabels, taskCopy, terms } from "../../lib/copy";
 import { cx } from "../../lib/cx";
-import type { Member, Task } from "../../types";
+import { describeRule, rotationPreview } from "../../lib/recurrenceFormat";
+import type { Member, Task, TaskRotation, WeekStart } from "../../types";
+import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { TaskAssigneeAvatar, TaskDueLabel } from "./TaskParts";
 
@@ -15,14 +25,17 @@ const priorityText = {
 
 /**
  * Desktop «Aufgabendetails» (`Tasks.dc.html`): title with «Bearbeiten», notes, Zuständig /
- * Fällig am / Priorität / Wiederholen, «Löschen». Rotation and «Diesmal überspringen» come
- * with Phase 4 / RTK-11.
+ * Fällig am / Priorität / Wiederholen, the «Abwechseln» block of a rotating task (Phase 4,
+ * D28), «Löschen». «Diesmal überspringen» stays hidden until RTK-11.
  */
 export function TaskDetailPanel({
   task,
   assignee,
   today,
   timeZone,
+  weekStartsOn,
+  memberIds,
+  memberById,
   onEdit,
   onDelete,
 }: {
@@ -30,10 +43,14 @@ export function TaskDetailPanel({
   assignee: Member | undefined;
   today: string;
   timeZone: string;
+  weekStartsOn: WeekStart;
+  memberIds: readonly string[];
+  memberById: (uid: string) => Member | undefined;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const overdue = dueGroup(task.dueDate, today) === "overdue";
+  const recurring = isRecurring(task) ? task : undefined;
   return (
     <aside
       aria-label={taskCopy.details}
@@ -74,10 +91,21 @@ export function TaskDetailPanel({
         </dd>
         <dt className="text-ink-muted">{terms.repeat}</dt>
         <dd className="flex items-center gap-1.5 font-medium">
-          <ArrowPathIcon aria-hidden="true" className="size-4 text-ink-muted" />
-          {taskCopy.noRepeat}
+          <ArrowPathIcon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
+          {recurring ? describeRule(recurring.recurrence, { weekStartsOn }) : taskCopy.noRepeat}
         </dd>
       </dl>
+      {recurring?.rotation && (
+        <RotationBlock
+          task={recurring}
+          rotation={recurring.rotation}
+          today={today}
+          timeZone={timeZone}
+          weekStartsOn={weekStartsOn}
+          memberIds={memberIds}
+          memberById={memberById}
+        />
+      )}
       <div className="flex border-t border-line pt-3.5">
         <Button
           variant="danger-ghost"
@@ -90,5 +118,77 @@ export function TaskDetailPanel({
         </Button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * «Abwechseln»: the members in order, the current one emphasised, and the preview «Diesen
+ * Samstag Nevio, danach Anna am Sa., 10. Okt.» (`Tasks.dc.html`, D28). Former members are
+ * left out.
+ */
+function RotationBlock({
+  task,
+  rotation,
+  today,
+  timeZone,
+  weekStartsOn,
+  memberIds,
+  memberById,
+}: {
+  task: Task & { dueDate: string };
+  rotation: TaskRotation;
+  today: string;
+  timeZone: string;
+  weekStartsOn: WeekStart;
+  memberIds: readonly string[];
+  memberById: (uid: string) => Member | undefined;
+}) {
+  const order = rotationOrder(rotation)
+    .map(memberById)
+    .filter((member): member is Member => member !== undefined);
+  const next = buildNextOccurrence(
+    task,
+    { today, weekStartsOn, memberIds },
+    { advanceRotation: true },
+  );
+  const current = order[0];
+  const nextMember = next.assigneeId ? memberById(next.assigneeId) : undefined;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-control bg-sunken p-3.5">
+      <span className="flex items-center gap-1.5 text-[13px] font-semibold text-ink-muted">
+        <ArrowsRightLeftIcon aria-hidden="true" className="size-4" />
+        {taskCopy.rotation}
+      </span>
+      <ol className="flex flex-wrap items-center gap-2">
+        {order.map((member, index) => (
+          <Fragment key={member.uid}>
+            {index > 0 && (
+              <ArrowRightIcon aria-hidden="true" className="size-4 shrink-0 text-ink-subtle" />
+            )}
+            <li
+              className={cx(
+                "flex h-8 items-center gap-1.5 rounded-pill bg-surface pr-2.5 pl-0.75 text-[14px] shadow-card",
+                index === 0 ? "font-semibold text-ink" : "font-medium text-ink-muted",
+              )}
+            >
+              <Avatar initials={member.initials} color={member.avatarColor} size={26} />
+              {member.displayName}
+            </li>
+          </Fragment>
+        ))}
+      </ol>
+      {current && nextMember && (
+        <span className="text-[13px] text-ink-muted">
+          {rotationPreview(
+            { dueDate: task.dueDate, name: current.displayName },
+            { dueDate: next.dueDate, name: nextMember.displayName },
+            today,
+            weekStartsOn,
+            timeZone,
+          )}
+        </span>
+      )}
+    </div>
   );
 }

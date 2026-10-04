@@ -135,6 +135,25 @@ function optimisticWrites() {
   taskServiceMock.deleteTask.mockImplementation(async (_hid, task) => {
     fakeStore.setTasks(fakeStore.tasks.filter((t) => t.id !== task.id));
   });
+  taskServiceMock.deleteOccurrence.mockResolvedValue(undefined);
+  taskServiceMock.deleteSeries.mockResolvedValue(undefined);
+}
+
+const weeklySat = { freq: "weekly" as const, interval: 1, byWeekday: [6] };
+
+/** «Bad putzen», weekly on Saturday, rotating Nevio → Anna, due Sat 3 Oct (Phase 4). */
+function bathroom(overrides: Partial<Task> = {}): Task {
+  return makeTask({
+    id: "bath",
+    title: "Bad putzen",
+    dueDate: "2026-10-03",
+    assigneeId: "nevio",
+    recurrence: weeklySat,
+    rotation: { memberIds: ["nevio", "anna"], index: 0 },
+    seriesId: "bath",
+    seriesIndex: 1,
+    ...overrides,
+  });
 }
 
 beforeAll(async () => {
@@ -638,7 +657,10 @@ describe("Schnellerfassung «Aufgabe» (B13)", () => {
     const input = within(sheet).getByRole("textbox", { name: "Was ist zu tun?" });
     const add = within(sheet).getByRole("button", { name: "Aufgabe hinzufügen" });
     expect(add).toBeDisabled();
-    expect(within(sheet).queryByRole("button", { name: "Wiederholen" })).not.toBeInTheDocument();
+    // «Wiederholen» is an action chip (Phase 4 D31), never pressed.
+    expect(within(sheet).getByRole("button", { name: "Wiederholen" })).not.toHaveAttribute(
+      "aria-pressed",
+    );
 
     await userEvent.type(input, "Altpapier");
     await userEvent.click(within(sheet).getByRole("button", { name: "Heute", pressed: false }));
@@ -691,5 +713,352 @@ describe("Schnellerfassung «Aufgabe» (B13)", () => {
       "aria-checked",
       "true",
     );
+  });
+});
+
+describe("recurring tasks (Phase 4)", () => {
+  beforeEach(() => {
+    fakeStore.tasks = [
+      ...exampleTasks().filter((task) => task.id !== "water"),
+      bathroom(),
+      makeTask({
+        id: "water",
+        title: "Pflanzen giessen",
+        dueDate: "2026-09-29",
+        assigneeId: "nevio",
+        recurrence: { freq: "daily", interval: 4 },
+        seriesId: "water",
+        seriesIndex: 1,
+      }),
+    ];
+  });
+
+  it("rows show the short rule and the rotation (B10)", async () => {
+    renderTasks();
+    await page();
+    const row = screen.getByRole("checkbox", { name: "Abhaken: Bad putzen" }).closest("li")!;
+    expect(row).toHaveTextContent("Wöchentlich");
+    expect(row).toHaveTextContent("Abwechselnd: Nevio → Anna");
+    const water = screen
+      .getByRole("checkbox", { name: "Abhaken: Pflanzen giessen" })
+      .closest("li")!;
+    expect(water).toHaveTextContent("Alle 4 Tage");
+    expect(water).not.toHaveTextContent("Abwechselnd");
+    const plain = screen.getByRole("checkbox", { name: "Abhaken: Küche putzen" }).closest("li")!;
+    expect(plain).not.toHaveTextContent("Wiederholen");
+  });
+
+  it("completing passes the recurrence context and names the next assignee (D29)", async () => {
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Abhaken: Bad putzen" }));
+    await waitFor(() => expect(taskServiceMock.completeTask).toHaveBeenCalledTimes(1), {
+      timeout: 2000,
+    });
+    expect(taskServiceMock.completeTask.mock.calls[0][3]).toEqual({
+      today: TODAY,
+      weekStartsOn: 1,
+      memberIds: ["nevio", "anna"],
+    });
+    expect(
+      screen.getByText("«Bad putzen» erledigt · als Nächstes ist Anna dran"),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Rückgängig" }));
+    const [, reopened, list] = taskServiceMock.reopenTask.mock.calls[0];
+    expect(reopened).toMatchObject({ id: "bath" });
+    expect(list?.map((task) => task.id)).toContain("bath");
+  });
+
+  it("without rotation the toast names the next due date (D29)", async () => {
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("checkbox", { name: "Abhaken: Pflanzen giessen" }));
+    expect(
+      await screen.findByText(
+        "«Pflanzen giessen» erledigt · nächstes Mal am Sa., 3. Okt.",
+        undefined,
+        {
+          timeout: 2000,
+        },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("reopening from «Erledigt» passes the task list (RTK-10)", async () => {
+    fakeStore.tasks = [
+      ...fakeStore.tasks,
+      bathroom({ id: "bath-old", status: "done", completedAt: new Date(), completedBy: "anna" }),
+    ];
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: /Erledigt/ }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Bad putzen wieder öffnen" }));
+    const [, task, list] = taskServiceMock.reopenTask.mock.calls[0];
+    expect(task).toMatchObject({ id: "bath-old" });
+    expect(list).toHaveLength(fakeStore.tasks.length);
+  });
+
+  it("delete asks «Nur diese / Ganze Serie» (RTK-08, B8)", async () => {
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Aufgabe löschen" }));
+    const confirm = screen.getByRole("alertdialog", { name: "«Bad putzen» löschen?" });
+    expect(confirm).toHaveTextContent(
+      "Diese Aufgabe wiederholt sich jeden Samstag. Was möchtest du löschen?",
+    );
+    const one = within(confirm).getByRole("radio", { name: /^Nur diese/ });
+    const all = within(confirm).getByRole("radio", { name: /^Ganze Serie/ });
+    expect(one).toBeChecked();
+    expect(confirm).toHaveTextContent("Nur Sa., 3. Okt. Die nächste bleibt.");
+    expect(confirm).toHaveTextContent("Alle künftigen Samstage.");
+
+    await userEvent.click(within(confirm).getByRole("button", { name: "Nur diese löschen" }));
+    expect(taskServiceMock.deleteOccurrence.mock.calls[0][1]).toMatchObject({ id: "bath" });
+    expect(taskServiceMock.deleteOccurrence.mock.calls[0][3]).toMatchObject({ today: TODAY });
+    expect(taskServiceMock.deleteTask).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Aufgabe löschen" }));
+    const again = screen.getByRole("alertdialog", { name: "«Bad putzen» löschen?" });
+    await userEvent.click(within(again).getByRole("radio", { name: /^Ganze Serie/ }));
+    expect(within(again).getByRole("radio", { name: /^Ganze Serie/ })).toBeChecked();
+    await userEvent.click(within(again).getByRole("button", { name: "Ganze Serie löschen" }));
+    expect(taskServiceMock.deleteSeries.mock.calls[0][1]).toMatchObject({ id: "bath" });
+    expect(all).not.toBeInTheDocument();
+  });
+
+  it("a non-weekly series uses the generic hint", async () => {
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: /^Pflanzen giessen/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Aufgabe löschen" }));
+    const confirm = screen.getByRole("alertdialog", { name: "«Pflanzen giessen» löschen?" });
+    expect(confirm).toHaveTextContent("Diese Aufgabe wiederholt sich alle 4 Tage.");
+    expect(confirm).toHaveTextContent("Alle künftigen Wiederholungen.");
+  });
+
+  describe("desktop", () => {
+    beforeEach(() => mockDesktop(true));
+
+    it("the detail panel shows the rule, the rotation and the preview (D28)", async () => {
+      renderTasks();
+      await page();
+      await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+      const panel = screen.getByRole("complementary", { name: "Aufgabendetails" });
+      expect(panel).toHaveTextContent("Jeden Samstag");
+      expect(panel).not.toHaveTextContent("Wiederholt sich nicht");
+      expect(within(panel).getByText("Abwechseln")).toBeInTheDocument();
+      expect(
+        within(panel)
+          .getAllByRole("listitem")
+          .map((item) => item.textContent),
+      ).toEqual(["NENevio", "ANAnna"]);
+      expect(panel).toHaveTextContent("Diesen Samstag Nevio, danach Anna am Sa., 10. Okt.");
+      expect(within(panel).queryByText("Diesmal überspringen")).not.toBeInTheDocument();
+    });
+
+    it("rows show rule and rotation before the date", async () => {
+      renderTasks();
+      await page();
+      const row = screen.getByRole("checkbox", { name: "Abhaken: Bad putzen" }).closest("li")!;
+      expect(row).toHaveTextContent(/Wöchentlich.*Nevio → Anna.*Sa\., 3\. Okt\./);
+    });
+
+    it("the panel deletes a recurring task through the series dialog", async () => {
+      renderTasks();
+      await page();
+      await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+      const panel = screen.getByRole("complementary", { name: "Aufgabendetails" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Löschen" }));
+      const confirm = screen.getByRole("alertdialog", { name: "«Bad putzen» löschen?" });
+      await userEvent.click(within(confirm).getByRole("button", { name: "Nur diese löschen" }));
+      expect(taskServiceMock.deleteOccurrence).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("editing recurrence and rotation (Phase 4 slice C)", () => {
+  async function openQuickAdd() {
+    renderTasks();
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: "Schnellerfassung" }));
+    return screen.getByRole("dialog", { name: "Schnellerfassung" });
+  }
+
+  it("Schnellerfassung «Wiederholen» → a new weekly task rotating Anna → Nevio (D26, D31, B4)", async () => {
+    const quick = await openQuickAdd();
+    await userEvent.type(
+      within(quick).getByRole("textbox", { name: "Was ist zu tun?" }),
+      "Bad putzen",
+    );
+    await userEvent.click(within(quick).getByRole("button", { name: "Wiederholen" }));
+
+    const sheet = screen.getByRole("dialog", { name: "Neue Aufgabe" });
+    expect(within(sheet).getByRole("textbox", { name: "Titel" })).toHaveValue("Bad putzen");
+    const repeat = within(sheet).getByRole("group", { name: "Wiederholen" });
+    expect(within(repeat).getByRole("button", { name: "Nie" })).toHaveFocus();
+    expect(
+      within(repeat).queryByRole("button", { name: "Benutzerdefiniert" }),
+    ).not.toBeInTheDocument();
+    expect(within(sheet).queryByText("Endet")).not.toBeInTheDocument();
+
+    await userEvent.click(within(repeat).getByRole("button", { name: "Wöchentlich" }));
+    // D26: no date yet → the first matching date (today is a Wednesday).
+    expect(sheet).toHaveTextContent("Jeden Mittwoch");
+    expect(within(sheet).getByRole("button", { name: "Ohne Datum" })).toBeDisabled();
+    const days = within(sheet).getByRole("group", { name: "An diesen Tagen" });
+    expect(
+      within(days)
+        .getAllByRole("button")
+        .map((day) => day.textContent),
+    ).toEqual(["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]);
+    // D33: the only selected day stays selected.
+    await userEvent.click(within(days).getByRole("button", { name: "Mittwoch" }));
+    expect(within(days).getByRole("button", { name: "Mittwoch" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(within(sheet).getByRole("switch", { name: "Abwechseln" }));
+    const rotation = within(sheet).getByRole("list", { name: "Abwechseln" });
+    expect(within(rotation).getAllByRole("listitem")[0]).toHaveTextContent("Diesmal");
+    expect(sheet).toHaveTextContent("Abwechseln ist an: diesmal Nevio, danach Anna.");
+    expect(within(sheet).getByRole("button", { name: "Nevio" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await userEvent.click(within(rotation).getByRole("button", { name: "Anna nach oben" }));
+    expect(within(sheet).getByRole("button", { name: "Anna" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(sheet).toHaveTextContent("Bad putzen · jeden Mittwoch · Anna → Nevio");
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "Aufgabe hinzufügen" }));
+    expect(taskServiceMock.createTask.mock.calls[0][1]).toEqual({
+      title: "Bad putzen",
+      assigneeId: "anna",
+      dueDate: TODAY,
+      priority: "low",
+      recurrence: { freq: "weekly", interval: 1, byWeekday: [3] },
+      rotation: { memberIds: ["anna", "nevio"], index: 0 },
+    });
+  });
+
+  it("«Alle N Tage» with the stepper (2–52)", async () => {
+    const quick = await openQuickAdd();
+    await userEvent.type(
+      within(quick).getByRole("textbox", { name: "Was ist zu tun?" }),
+      "Pflanzen",
+    );
+    await userEvent.click(within(quick).getByRole("button", { name: "Wiederholen" }));
+    const sheet = screen.getByRole("dialog", { name: "Neue Aufgabe" });
+    await userEvent.click(within(sheet).getByRole("button", { name: "Alle N Tage" }));
+    expect(within(sheet).getByRole("button", { name: "Weniger" })).toBeDisabled();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Mehr" }));
+    await userEvent.click(within(sheet).getByRole("button", { name: "Mehr" }));
+    expect(sheet).toHaveTextContent("Alle 4 Tage");
+    expect(within(sheet).queryByRole("switch", { name: "Abwechseln" })).toBeInTheDocument();
+    await userEvent.click(within(sheet).getByRole("button", { name: "Aufgabe hinzufügen" }));
+    expect(taskServiceMock.createTask.mock.calls[0][1]).toMatchObject({
+      recurrence: { freq: "daily", interval: 4 },
+      dueDate: TODAY,
+    });
+    expect(taskServiceMock.createTask.mock.calls[0][1]).not.toHaveProperty("rotation");
+  });
+
+  describe("an existing series", () => {
+    beforeEach(() => {
+      fakeStore.tasks = [...exampleTasks(), bathroom()];
+    });
+
+    async function openBathroom() {
+      renderTasks();
+      await page();
+      await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+      return screen.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+    }
+
+    it("shows the rule and rotation; a title edit writes only the title (B4)", async () => {
+      const sheet = await openBathroom();
+      expect(within(sheet).getByRole("button", { name: "Wöchentlich" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(within(sheet).getByRole("button", { name: "Samstag" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(within(sheet).getByRole("switch", { name: "Abwechseln" })).toHaveAttribute(
+        "aria-checked",
+        "true",
+      );
+      expect(
+        within(sheet).queryByRole("button", { name: "Datum entfernen" }),
+      ).not.toBeInTheDocument();
+      const title = within(sheet).getByRole("textbox", { name: "Titel" });
+      await userEvent.clear(title);
+      await userEvent.type(title, "Bad gründlich putzen");
+      await userEvent.click(within(sheet).getByRole("button", { name: "Speichern" }));
+      expect(taskServiceMock.updateTask.mock.calls[0][2]).toEqual({
+        title: "Bad gründlich putzen",
+      });
+    });
+
+    it("«Nie» ends the repeat (B6)", async () => {
+      const sheet = await openBathroom();
+      await userEvent.click(within(sheet).getByRole("button", { name: "Nie" }));
+      expect(within(sheet).queryByRole("switch", { name: "Abwechseln" })).not.toBeInTheDocument();
+      await userEvent.click(within(sheet).getByRole("button", { name: "Speichern" }));
+      expect(taskServiceMock.updateTask.mock.calls[0][2]).toEqual({
+        recurrence: null,
+        rotation: null,
+      });
+    });
+
+    it("«Niemand» turns the rotation off; changing the rule keeps the rotation", async () => {
+      const sheet = await openBathroom();
+      await userEvent.click(within(sheet).getByRole("button", { name: "Alle N Wochen" }));
+      await userEvent.click(within(sheet).getByRole("button", { name: "Sonntag" }));
+      await userEvent.click(within(sheet).getByRole("button", { name: "Speichern" }));
+      expect(taskServiceMock.updateTask.mock.calls[0][2]).toEqual({
+        recurrence: { freq: "weekly", interval: 2, byWeekday: [0, 6] },
+      });
+
+      await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+      const again = screen.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+      await userEvent.click(within(again).getByRole("button", { name: "Niemand" }));
+      expect(within(again).getByRole("switch", { name: "Abwechseln" })).toHaveAttribute(
+        "aria-checked",
+        "false",
+      );
+      await userEvent.click(within(again).getByRole("button", { name: "Speichern" }));
+      expect(taskServiceMock.updateTask.mock.calls[1][2]).toEqual({
+        assigneeId: null,
+        rotation: null,
+      });
+    });
+
+    it("desktop: the two-column dialog with rotation chips", async () => {
+      mockDesktop(true);
+      renderTasks();
+      await page();
+      await userEvent.click(screen.getByRole("button", { name: /^Bad putzen/ }));
+      const panel = screen.getByRole("complementary", { name: "Aufgabendetails" });
+      await userEvent.click(within(panel).getByRole("button", { name: "Aufgabe bearbeiten" }));
+      const dialog = screen.getByRole("dialog", { name: "Aufgabe bearbeiten" });
+      expect(dialog.querySelector("form")).toHaveClass("grid-cols-2");
+      const rotation = within(dialog).getByRole("list", { name: "Abwechseln" });
+      expect(within(rotation).getByRole("button", { name: "Nevio nach vorne" })).toBeDisabled();
+      await userEvent.click(within(rotation).getByRole("button", { name: "Anna nach vorne" }));
+      expect(dialog).toHaveTextContent("Abwechseln ist an: diesmal Anna, danach Nevio.");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+      expect(taskServiceMock.updateTask.mock.calls[0][2]).toEqual({
+        assigneeId: "anna",
+        rotation: { memberIds: ["anna", "nevio"], index: 0 },
+      });
+    });
   });
 });

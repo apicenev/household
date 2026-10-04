@@ -1,12 +1,22 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import { isWriteOutcomeReached, type TaskWriteIntent } from "../../domain/tasks";
+import {
+  buildNextOccurrence,
+  isRecurring,
+  isWriteOutcomeReached,
+  todayKey,
+  type RecurrenceContext,
+  type TaskWriteIntent,
+} from "../../domain/tasks";
 import { useAuth } from "../../lib/auth/useAuth";
 import { taskCopy } from "../../lib/copy";
+import { completionNote } from "../../lib/recurrenceFormat";
 import { GENERIC_WRITE_ERROR } from "../../lib/firestoreErrors";
 import { useLoadedHousehold } from "../../lib/household/useHousehold";
 import {
   completeTask,
   createTask,
+  deleteOccurrence,
+  deleteSeries,
   deleteTask,
   reopenTask,
   updateTask,
@@ -33,6 +43,13 @@ export function useTaskWriter() {
   const toast = useToast();
   const uid = user?.uid ?? "";
   const householdId = household.id;
+  const { timeZone, weekStartsOn, memberIds } = household;
+
+  // Recurring tasks (Phase 4): «today» at the moment of the write, in the household time zone.
+  const recurrenceContext = useCallback(
+    (): RecurrenceContext => ({ today: todayKey(new Date(), timeZone), weekStartsOn, memberIds }),
+    [timeZone, weekStartsOn, memberIds],
+  );
 
   // The latest tasks, for rejections that arrive long after the call (offline queue).
   const tasksRef = useRef(tasks);
@@ -84,15 +101,36 @@ export function useTaskWriter() {
         );
       },
       complete(task: Task) {
-        watch(completeTask(householdId, task, uid), task.id, "complete");
+        watch(completeTask(householdId, task, uid, recurrenceContext()), task.id, "complete");
+      },
+      completedMessage(task: Task): string {
+        if (!isRecurring(task)) return taskCopy.completedToast(task.title);
+        const ctx = recurrenceContext();
+        const next = buildNextOccurrence(task, ctx, { advanceRotation: true });
+        const note = completionNote(
+          {
+            dueDate: next.dueDate,
+            assigneeName: next.assigneeId ? memberById(next.assigneeId)?.displayName : undefined,
+            rotates: next.rotation !== undefined,
+          },
+          ctx.today,
+          timeZone,
+        );
+        return taskCopy.completedToastWithNote(task.title, note);
       },
       reopen(task: Task) {
-        watch(reopenTask(householdId, task), task.id, "reopen");
+        watch(reopenTask(householdId, task, tasksRef.current), task.id, "reopen");
       },
       remove(task: Task) {
         watch(deleteTask(householdId, task), task.id, "delete");
       },
+      removeOccurrence(task: Task) {
+        watch(deleteOccurrence(householdId, task, uid, recurrenceContext()), task.id, "delete");
+      },
+      removeSeries(task: Task) {
+        watch(deleteSeries(householdId, task), task.id, "delete");
+      },
     }),
-    [householdId, uid, memberById, watch],
+    [householdId, uid, memberById, watch, recurrenceContext, timeZone],
   );
 }

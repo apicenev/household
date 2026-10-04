@@ -6,16 +6,21 @@
  * With `--household` (Phase 2) it also creates «Musterstrasse 12» with Nevio as owner and
  * prints its invite code. Anna stays without a household, so the join flow can be tested in
  * a second browser profile. Since Phase 3 the household also gets the design's example tasks
- * (relative to today), unless it has tasks already.
+ * (relative to today), unless it has tasks already. Since Phase 4 it also gets three recurring
+ * tasks with fixed ids, added whenever they're missing (also to a household seeded before).
  *
- * Usage: npm run emulators (in another terminal), then `npm run seed` or
- * `npm run seed -- --household`.
+ * With `--with-anna` (Phase 4, implies `--household`) Anna joins «Musterstrasse 12» like
+ * joinHousehold would, and «Bad putzen» rotates Nevio → Anna.
+ *
+ * Usage: npm run emulators (in another terminal), then `npm run seed`,
+ * `npm run seed -- --household` or `npm run seed -- --with-anna`.
  * Idempotent: existing users and documents are left as they are; an expired code is replaced.
  * Refuses to run against anything but the emulators.
  */
 import { initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore, Timestamp, type Firestore } from "firebase-admin/firestore";
+import { weekdayOfKey } from "../src/domain/dateKeys";
 import { generateInviteCode, inviteExpiresAt, isInviteExpired } from "../src/domain/invite";
 import { avatarColorFor, initialsFor } from "../src/domain/member";
 import { todayKey } from "../src/domain/tasks";
@@ -182,13 +187,6 @@ async function seedTasks(db: Firestore, hid: string, ownerUid: string): Promise<
   const now = Timestamp.now();
   const open = [
     {
-      title: "Pflanzen giessen",
-      notes: "Küchenkräuter, Monstera und Balkonkisten.",
-      assigneeId: ownerUid,
-      dueDate: dayFromToday(-1),
-      priority: "low",
-    },
-    {
       title: "Altpapier rausbringen",
       notes: "Papier bündeln und vor 20:00 rausstellen.",
       assigneeId: ownerUid,
@@ -196,12 +194,6 @@ async function seedTasks(db: Firestore, hid: string, ownerUid: string): Promise<
       priority: "low",
     },
     { title: "Küche putzen", assigneeId: null, dueDate: dayFromToday(0), priority: "high" },
-    {
-      title: "Bettwäsche wechseln",
-      assigneeId: ownerUid,
-      dueDate: dayFromToday(4),
-      priority: "medium",
-    },
     {
       title: "Vermieter wegen Heizung anrufen",
       notes: "Heizkörper im Schlafzimmer bleibt kalt.",
@@ -240,6 +232,136 @@ async function seedTasks(db: Firestore, hid: string, ownerUid: string): Promise<
   console.log(`+ ${open.length} open and ${done.length} completed tasks`);
 }
 
+/** First date from today (inclusive) on the given weekday (0 = Sunday … 6 = Saturday). */
+function nextWeekday(weekday: number): string {
+  for (let days = 0; ; days++) {
+    const key = dayFromToday(days);
+    if (weekdayOfKey(key) === weekday) return key;
+  }
+}
+
+/**
+ * Recurring examples of `Tasks.dc.html` (Phase 4 §4.7) with fixed ids (each is the first
+ * occurrence of its own series), so reruns add only the missing ones. «Bad putzen» rotates
+ * Nevio → Anna once Anna is a member.
+ */
+async function seedRecurringTasks(
+  db: Firestore,
+  hid: string,
+  ownerUid: string,
+  annaUid: string | null,
+): Promise<void> {
+  const now = Timestamp.now();
+  const saturday = nextWeekday(6);
+  const examples = [
+    {
+      id: "seed-water",
+      title: "Pflanzen giessen",
+      notes: "Küchenkräuter, Monstera und Balkonkisten.",
+      assigneeId: ownerUid,
+      dueDate: dayFromToday(-1),
+      priority: "low",
+      recurrence: { freq: "daily", interval: 4 },
+    },
+    {
+      id: "seed-sheets",
+      title: "Bettwäsche wechseln",
+      assigneeId: ownerUid,
+      dueDate: nextWeekday(0),
+      priority: "medium",
+      recurrence: { freq: "weekly", interval: 2, byWeekday: [0] },
+    },
+    {
+      id: "seed-bathroom",
+      title: "Bad putzen",
+      notes: "Dusche, Lavabo, WC und Spiegel. Zum Schluss feucht aufnehmen.",
+      assigneeId: ownerUid,
+      dueDate: saturday,
+      priority: "low",
+      recurrence: { freq: "weekly", interval: 1, byWeekday: [6] },
+      ...(annaUid ? { rotation: { memberIds: [ownerUid, annaUid], index: 0 } } : {}),
+    },
+  ];
+  let added = 0;
+  for (const { id, ...task } of examples) {
+    const ref = db.doc(`households/${hid}/tasks/${id}`);
+    const existing = await ref.get();
+    if (existing.exists) {
+      // A rerun with --with-anna turns on the rotation of an untouched «Bad putzen».
+      const data = existing.data();
+      if ("rotation" in task && data?.status === "open" && !data.rotation) {
+        await ref.update({ rotation: task.rotation, assigneeId: ownerUid, updatedAt: now });
+        console.log(`~ «${task.title}» rotates Nevio → Anna`);
+      }
+      continue;
+    }
+    await ref.set({
+      ...task,
+      seriesId: id,
+      seriesIndex: 1,
+      status: "open",
+      createdBy: ownerUid,
+      createdAt: now,
+      updatedAt: now,
+    });
+    added += 1;
+  }
+  console.log(added > 0 ? `+ ${added} recurring tasks` : "= recurring tasks exist");
+}
+
+/**
+ * Anna joins «Musterstrasse 12» (Phase 4, `--with-anna`), written like
+ * inviteService.joinHousehold. Skipped if she's in a household already.
+ */
+async function seedAnnaJoin(db: Firestore, hid: string, code: string, uid: string) {
+  const profileRef = db.doc(`users/${uid}`);
+  const profile = (await profileRef.get()).data();
+  if (profile?.householdId) {
+    console.log(`= ${accounts[1].email} is in a household (${profile.householdId as string})`);
+    return;
+  }
+  const name = (profile?.displayName as string | undefined) ?? accounts[1].displayName;
+  const initials = (profile?.initials as string | undefined) ?? initialsFor(name);
+  const avatarColor = (profile?.avatarColor as number | undefined) ?? avatarColorFor(uid);
+  const now = Timestamp.now();
+  const batch = db.batch();
+  batch.update(db.doc(`households/${hid}`), {
+    memberIds: FieldValue.arrayUnion(uid),
+    updatedAt: now,
+  });
+  batch.set(db.doc(`households/${hid}/members/${uid}`), {
+    displayName: name,
+    initials,
+    avatarColor,
+    role: "member",
+    joinedAt: now,
+    joinedWithCode: code,
+  });
+  if (profile) {
+    batch.update(profileRef, { householdId: hid });
+  } else {
+    batch.set(profileRef, {
+      displayName: name,
+      email: accounts[1].email,
+      initials,
+      avatarColor,
+      householdId: hid,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+  batch.update(db.doc(`invites/${code}`), { memberCount: FieldValue.increment(1) });
+  batch.set(db.collection(`households/${hid}/activity`).doc(), {
+    actorId: uid,
+    type: "member_joined",
+    targetType: "member",
+    targetId: uid,
+    targetTitle: name,
+    createdAt: now,
+  });
+  await batch.commit();
+  console.log(`+ ${accounts[1].email} joined «${HOUSEHOLD_NAME}»`);
+}
+
 async function main() {
   assertEmulatorOnly();
   if (!(await emulatorsRunning())) {
@@ -247,7 +369,8 @@ async function main() {
     process.exit(1);
   }
 
-  const withHousehold = process.argv.includes("--household");
+  const withAnna = process.argv.includes("--with-anna");
+  const withHousehold = withAnna || process.argv.includes("--household");
   const app = initializeApp({ projectId: PROJECT_ID });
   const auth = getAuth(app);
   const uids: string[] = [];
@@ -271,12 +394,18 @@ async function main() {
   if (withHousehold) {
     const db = getFirestore(app);
     const { hid, code } = await seedHousehold(db, uids[0], accounts[0].displayName);
+    if (withAnna) await seedAnnaJoin(db, hid, code, uids[1]);
     await seedTasks(db, hid, uids[0]);
+    const memberIds = ((await db.doc(`households/${hid}`).get()).data()?.memberIds ??
+      []) as string[];
+    await seedRecurringTasks(db, hid, uids[0], memberIds.includes(uids[1]) ? uids[1] : null);
     const invite = (await db.doc(`invites/${code}`).get()).data();
     const validUntil = inviteExpiresAt((invite?.createdAt as Timestamp).toDate());
     console.log(
       `\nInvite code: ${code} (valid until ${validUntil.toLocaleString("de-CH")}).` +
-        `\nLog in as ${accounts[1].email} in a second browser profile and join with it.`,
+        (withAnna
+          ? `\n${accounts[1].email} is a member too; log in as her in a second browser profile.`
+          : `\nLog in as ${accounts[1].email} in a second browser profile and join with it.`),
     );
   }
 

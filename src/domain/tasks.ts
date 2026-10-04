@@ -1,5 +1,16 @@
 import { toDateKey } from "../lib/format";
-import type { NewTaskInput, Task, TaskChanges, TaskPriority, WeekStart } from "../types";
+import { daysBetweenKeys, endOfWeekKey } from "./dateKeys";
+import { nextDueDate, sameRule } from "./recurrence";
+import { nextAssignee, pruneRotation, sameRotation } from "./rotation";
+import type {
+  NewTaskInput,
+  RecurrenceRule,
+  Task,
+  TaskChanges,
+  TaskPriority,
+  TaskRotation,
+  WeekStart,
+} from "../types";
 
 /**
  * Task rules (TSK-05, TSK-06, TSK-09, business rule §8.1). Pure: «today» is passed in as a
@@ -45,29 +56,7 @@ export function isDueToday(task: Pick<Task, "dueDate">, today: string): boolean 
   return task.dueDate === today;
 }
 
-/** Calendar days from date key `a` to date key `b` (b − a). */
-export function daysBetweenKeys(a: string, b: string): number {
-  return Math.round((keyToUtc(b) - keyToUtc(a)) / DAY_MS);
-}
-
-function keyToUtc(key: string): number {
-  const [year, month, day] = key.split("-").map(Number);
-  return Date.UTC(year, month - 1, day);
-}
-
-function addDaysToKey(key: string, days: number): string {
-  return new Date(keyToUtc(key) + days * DAY_MS).toISOString().slice(0, 10);
-}
-
-/**
- * Last day of the week containing `today`: Sunday when weeks start on Monday, Saturday when
- * they start on Sunday (HH-07).
- */
-export function endOfWeekKey(today: string, weekStartsOn: WeekStart): string {
-  const weekday = new Date(keyToUtc(today)).getUTCDay(); // 0 = Sunday … 6 = Saturday
-  const lastDay = (weekStartsOn + 6) % 7;
-  return addDaysToKey(today, (lastDay - weekday + 7) % 7);
-}
+export { daysBetweenKeys, endOfWeekKey };
 
 const priorityRank: Record<TaskPriority, number> = { high: 0, medium: 1, low: 2 };
 
@@ -227,7 +216,7 @@ export function validateTaskTitle(
   return { ok: true, title };
 }
 
-/** Trims title and notes; empty notes are dropped (B12). */
+/** Trims title and notes; empty notes are dropped (B12). A rotation needs a rule. */
 export function normalizeTaskInput(input: NewTaskInput): NewTaskInput {
   const notes = input.notes?.trim();
   const normalized: NewTaskInput = {
@@ -237,6 +226,10 @@ export function normalizeTaskInput(input: NewTaskInput): NewTaskInput {
     priority: input.priority,
   };
   if (notes) normalized.notes = notes;
+  if (input.recurrence) {
+    normalized.recurrence = input.recurrence;
+    if (input.rotation) normalized.rotation = input.rotation;
+  }
   return normalized;
 }
 
@@ -251,7 +244,107 @@ export function changedTaskFields(before: Task, after: NewTaskInput): TaskChange
   if (after.assigneeId !== before.assigneeId) changes.assigneeId = after.assigneeId;
   if (after.dueDate !== before.dueDate) changes.dueDate = after.dueDate;
   if (after.priority !== before.priority) changes.priority = after.priority;
+  // Deep comparisons, so an untouched rule or rotation is never written (Phase 4 B4).
+  if (!sameRule(after.recurrence, before.recurrence)) {
+    changes.recurrence = after.recurrence ?? null;
+  }
+  if (!sameRotation(after.rotation, before.rotation)) changes.rotation = after.rotation ?? null;
   return changes;
+}
+
+/**
+ * A recurring task in the sense of Phase 4: open and with a rule. A completed occurrence keeps
+ * its rule as history (B7) and doesn't count.
+ */
+export function isRecurring(task: Task): task is Task & {
+  recurrence: RecurrenceRule;
+  dueDate: string;
+  seriesId: string;
+  seriesIndex: number;
+} {
+  return (
+    task.status === "open" &&
+    task.recurrence !== undefined &&
+    task.dueDate !== null &&
+    task.seriesId !== undefined &&
+    task.seriesIndex !== undefined
+  );
+}
+
+/** Id of the occurrence generated after `task`: «{seriesId}-{seriesIndex + 1}» (B5). */
+export function nextOccurrenceId(task: Pick<Task, "seriesId" | "seriesIndex">): string | undefined {
+  if (task.seriesId === undefined || task.seriesIndex === undefined) return undefined;
+  return `${task.seriesId}-${task.seriesIndex + 1}`;
+}
+
+/** What the next occurrence is computed from. */
+export interface RecurrenceContext {
+  /** Today in the household time zone. */
+  today: string;
+  weekStartsOn: WeekStart;
+  /** Current members; former members are dropped from the assignee and the rotation. */
+  memberIds: readonly string[];
+}
+
+/** Fields of a generated occurrence (without status, author and times). */
+export interface NextOccurrence {
+  id: string;
+  title: string;
+  notes?: string;
+  assigneeId: string | null;
+  dueDate: string;
+  priority: TaskPriority;
+  recurrence: RecurrenceRule;
+  rotation?: TaskRotation;
+  seriesId: string;
+  seriesIndex: number;
+}
+
+/**
+ * The occurrence after `task` (RTK-03…05): due on the next schedule date ≥ today. On a
+ * completion the rotation moves on (B7); for «Nur diese» (`advanceRotation: false`, B8) the
+ * same person keeps the turn. Former members are pruned either way.
+ */
+export function buildNextOccurrence(
+  task: Task,
+  ctx: RecurrenceContext,
+  { advanceRotation }: { advanceRotation: boolean },
+): NextOccurrence {
+  if (!isRecurring(task)) throw new Error(`Task ${task.id} doesn't repeat`);
+
+  let assigneeId =
+    task.assigneeId !== null && ctx.memberIds.includes(task.assigneeId) ? task.assigneeId : null;
+  let rotation: TaskRotation | null = null;
+  if (task.rotation) {
+    const next = advanceRotation
+      ? nextAssignee(task.rotation, ctx.memberIds)
+      : pruneRotation(task.rotation, ctx.memberIds);
+    rotation = next.rotation;
+    assigneeId = next.assigneeId;
+  }
+
+  const seriesIndex = task.seriesIndex + 1;
+  const next: NextOccurrence = {
+    id: `${task.seriesId}-${seriesIndex}`,
+    title: task.title,
+    assigneeId,
+    dueDate: nextDueDate(task.recurrence, task.dueDate, ctx.today, ctx.weekStartsOn),
+    priority: task.priority,
+    recurrence: task.recurrence,
+    seriesId: task.seriesId,
+    seriesIndex,
+  };
+  if (task.notes !== undefined) next.notes = task.notes;
+  if (rotation) next.rotation = rotation;
+  return next;
+}
+
+/**
+ * Still exactly as generated (B9): open and never edited. A create writes `createdAt` and
+ * `updatedAt` with the same server time.
+ */
+export function isUntouched(task: Task): boolean {
+  return task.status === "open" && task.createdAt.getTime() === task.updatedAt.getTime();
 }
 
 /** What a write was meant to achieve, for reporting a rejection (D21). */

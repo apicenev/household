@@ -55,8 +55,16 @@ vi.mock("firebase/firestore", () => {
   };
 });
 
-const { completeTask, createTask, deleteTask, reopenTask, updateTask } =
-  await import("./taskService");
+const {
+  completeRecurringTask,
+  completeTask,
+  createTask,
+  deleteOccurrence,
+  deleteSeries,
+  deleteTask,
+  reopenTask,
+  updateTask,
+} = await import("./taskService");
 
 const names: Record<string, string> = { nevio: "Nevio", anna: "Anna" };
 const nameOf = (uid: string) => names[uid];
@@ -256,5 +264,203 @@ describe("completeTask / reopenTask / deleteTask", () => {
     await deleteTask("h1", task());
     expect(fake.state.commits).toEqual([]);
     expect(fake.state.writes).toEqual([{ op: "delete", path: "households/h1/tasks/t1" }]);
+  });
+});
+
+describe("recurring tasks (Phase 4)", () => {
+  const weeklySat = { freq: "weekly" as const, interval: 1, byWeekday: [6] };
+  const rotation = { memberIds: ["nevio", "anna"], index: 0 };
+  const ctx = { today: "2026-10-04", weekStartsOn: 1 as const, memberIds: ["nevio", "anna"] };
+  const recurring = (overrides: Partial<Task> = {}) =>
+    task({ recurrence: weeklySat, rotation, seriesId: "s1", seriesIndex: 1, ...overrides });
+
+  it("createTask starts a new series with a random id, not the task id (B5)", async () => {
+    await createTask(
+      "h1",
+      {
+        title: "Bad putzen",
+        assigneeId: "nevio",
+        dueDate: "2026-10-03",
+        priority: "low",
+        recurrence: weeklySat,
+        rotation,
+      },
+      "nevio",
+    ).committed;
+    const [taskWrite] = fake.state.commits[0];
+    expect(taskWrite.path).toBe("households/h1/tasks/auto1");
+    expect(taskWrite.data).toMatchObject({
+      recurrence: weeklySat,
+      rotation,
+      seriesId: "auto2",
+      seriesIndex: 1,
+    });
+  });
+
+  it("completing writes exactly 3 operations: done, next occurrence, «task_completed» (B7)", async () => {
+    await completeTask("h1", recurring(), "anna", ctx);
+    expect(fake.state.commits).toHaveLength(1);
+    const ops = fake.state.commits[0];
+    expect(ops).toHaveLength(3);
+    expect(ops[0]).toEqual({
+      op: "update",
+      path: "households/h1/tasks/t1",
+      data: {
+        status: "done",
+        completedAt: "SERVER_TIME",
+        completedBy: "anna",
+        updatedAt: "SERVER_TIME",
+      },
+    });
+    expect(ops[1]).toEqual({
+      op: "set",
+      path: "households/h1/tasks/s1-2",
+      data: {
+        title: "Bad putzen",
+        notes: "Spiegel",
+        assigneeId: "anna",
+        dueDate: "2026-10-10",
+        priority: "medium",
+        recurrence: weeklySat,
+        rotation: { memberIds: ["nevio", "anna"], index: 1 },
+        seriesId: "s1",
+        seriesIndex: 2,
+        status: "open",
+        createdBy: "anna",
+        createdAt: "SERVER_TIME",
+        updatedAt: "SERVER_TIME",
+      },
+    });
+    expect(ops[2]).toMatchObject({
+      op: "set",
+      data: { type: "task_completed", targetId: "t1", targetTitle: "Bad putzen", actorId: "anna" },
+    });
+  });
+
+  it("completeTask refuses a recurring task without context", async () => {
+    await expect(completeTask("h1", recurring(), "anna")).rejects.toThrow();
+    expect(fake.state.commits).toHaveLength(0);
+  });
+
+  it("completeRecurringTask leaves out rotation and notes when there are none", async () => {
+    await completeRecurringTask(
+      "h1",
+      recurring({ rotation: undefined, notes: undefined }),
+      "nevio",
+      ctx,
+    );
+    const next = fake.state.commits[0][1].data as Record<string, unknown>;
+    expect(next.assigneeId).toBe("nevio");
+    expect(next).not.toHaveProperty("rotation");
+    expect(next).not.toHaveProperty("notes");
+  });
+
+  it("«Nur diese»: deletes and creates the next with the same assignee (B8)", async () => {
+    await deleteOccurrence("h1", recurring(), "anna", ctx);
+    const ops = fake.state.commits[0];
+    expect(ops.map((op) => [op.op, op.path])).toEqual([
+      ["delete", "households/h1/tasks/t1"],
+      ["set", "households/h1/tasks/s1-2"],
+    ]);
+    expect(ops[1].data).toMatchObject({ assigneeId: "nevio", rotation, dueDate: "2026-10-10" });
+  });
+
+  it("«Ganze Serie»: deletes the open occurrence only", async () => {
+    await deleteSeries("h1", recurring());
+    expect(fake.state.writes).toEqual([{ op: "delete", path: "households/h1/tasks/t1" }]);
+  });
+
+  describe("reopenTask (RTK-10, B9)", () => {
+    const done = recurring({ status: "done", completedAt: new Date(), completedBy: "nevio" });
+    const generatedAt = new Date("2026-10-04T10:00:00Z");
+    const next = (overrides: Partial<Task> = {}) =>
+      recurring({
+        id: "s1-2",
+        seriesIndex: 2,
+        createdAt: generatedAt,
+        updatedAt: generatedAt,
+        ...overrides,
+      });
+
+    it("with an untouched next occurrence: reopens and deletes it in one batch", async () => {
+      await reopenTask("h1", done, [done, next()]);
+      expect(fake.state.commits[0].map((op) => [op.op, op.path])).toEqual([
+        ["update", "households/h1/tasks/t1"],
+        ["delete", "households/h1/tasks/s1-2"],
+      ]);
+      expect(fake.state.commits[0][0].data).not.toHaveProperty("recurrence");
+    });
+
+    it("with an edited next occurrence: reopens as a normal task", async () => {
+      await reopenTask("h1", done, [done, next({ updatedAt: new Date("2026-10-04T11:00:00Z") })]);
+      expect(fake.state.commits).toHaveLength(0);
+      expect(fake.state.writes).toEqual([
+        {
+          op: "update",
+          path: "households/h1/tasks/t1",
+          data: {
+            status: "open",
+            completedAt: "DELETE_FIELD",
+            completedBy: "DELETE_FIELD",
+            updatedAt: "SERVER_TIME",
+            recurrence: "DELETE_FIELD",
+            rotation: "DELETE_FIELD",
+          },
+        },
+      ]);
+    });
+
+    it("without a next occurrence (series deleted): reopens as a normal task", async () => {
+      await reopenTask("h1", done, [done]);
+      expect(fake.state.writes[0].data).toMatchObject({ recurrence: "DELETE_FIELD" });
+    });
+  });
+
+  describe("updateTask", () => {
+    it("«Nie» removes rule and rotation (B6)", async () => {
+      await updateTask("h1", recurring(), { recurrence: null }, "nevio", nameOf);
+      expect(fake.state.commits[0][0].data).toEqual({
+        recurrence: "DELETE_FIELD",
+        rotation: "DELETE_FIELD",
+        updatedAt: "SERVER_TIME",
+      });
+    });
+
+    it("a task that gets a rule starts a new series, even with an old seriesId (B5)", async () => {
+      const old = task({ seriesId: "old", seriesIndex: 1 });
+      await updateTask("h1", old, { recurrence: weeklySat }, "nevio", nameOf);
+      expect(fake.state.commits[0][0].data).toEqual({
+        recurrence: weeklySat,
+        seriesId: "auto1",
+        seriesIndex: 1,
+        updatedAt: "SERVER_TIME",
+      });
+    });
+
+    it("changing the rule of a recurring task keeps the series", async () => {
+      const daily = { freq: "daily" as const, interval: 4 };
+      await updateTask("h1", recurring(), { recurrence: daily }, "nevio", nameOf);
+      expect(fake.state.commits[0][0].data).toEqual({
+        recurrence: daily,
+        updatedAt: "SERVER_TIME",
+      });
+    });
+
+    it("writes and removes the rotation", async () => {
+      const turned = { memberIds: ["anna", "nevio"], index: 0 };
+      await updateTask(
+        "h1",
+        recurring(),
+        { rotation: turned, assigneeId: "anna" },
+        "nevio",
+        nameOf,
+      );
+      expect(fake.state.commits[0][0].data).toMatchObject({ rotation: turned, assigneeId: "anna" });
+      await updateTask("h1", recurring(), { rotation: null }, "nevio", nameOf);
+      expect(fake.state.commits[1][0].data).toEqual({
+        rotation: "DELETE_FIELD",
+        updatedAt: "SERVER_TIME",
+      });
+    });
   });
 });

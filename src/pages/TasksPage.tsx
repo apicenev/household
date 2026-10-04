@@ -22,6 +22,7 @@ import {
   filterTasks,
   groupOpenTasks,
   hasFilters,
+  isRecurring,
   recentlyCompleted,
   taskSummary,
   type TaskFilters,
@@ -32,6 +33,9 @@ import { useToday } from "../hooks/useToday";
 import { useAuth } from "../lib/auth/useAuth";
 import { actions as actionLabels, areas, taskCopy } from "../lib/copy";
 import { useLoadedHousehold } from "../lib/household/useHousehold";
+import { describeRule, rotationLabel } from "../lib/recurrenceFormat";
+import type { Task } from "../types";
+import type { TaskRepeatInfo } from "../components/tasks/TaskParts";
 
 /**
  * /tasks «Aufgaben» (`Tasks.dc.html`): filter chips (in the URL), the open tasks grouped
@@ -72,6 +76,17 @@ export default function TasksPage() {
   const selected = desktop
     ? (visibleOpen.find((task) => task.id === selectedId) ?? visibleOpen[0])
     : undefined;
+
+  // Row meta of a recurring task: «Wöchentlich» · «Nevio → Anna» (Phase 4 B10).
+  const repeatInfo = (task: Task): TaskRepeatInfo | undefined =>
+    isRecurring(task)
+      ? {
+          rule: describeRule(task.recurrence, { short: true }),
+          rotation: task.rotation
+            ? rotationLabel(task.rotation, (memberId) => memberById(memberId)?.displayName)
+            : undefined,
+        }
+      : undefined;
 
   const toggleAssignee = (value: string) =>
     setFilters({ ...filters, assignee: filters.assignee === value ? undefined : value });
@@ -182,6 +197,7 @@ export default function TasksPage() {
                 onOpen={desktop ? () => setSelectedId(task.id) : () => openEditTask(task.id)}
                 selected={selected?.id === task.id}
                 hideDue={group === "today"}
+                repeat={repeatInfo(task)}
                 first={index === 0}
               />
             ))}
@@ -242,6 +258,9 @@ export default function TasksPage() {
             assignee={selected.assigneeId ? memberById(selected.assigneeId) : undefined}
             today={today}
             timeZone={household.timeZone}
+            weekStartsOn={household.weekStartsOn}
+            memberIds={memberIds}
+            memberById={memberById}
             onEdit={() => openEditTask(selected.id)}
             onDelete={() => confirmDelete(selected)}
           />

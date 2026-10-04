@@ -6,7 +6,7 @@ import { cx } from "../../lib/cx";
 import type { Member, Task } from "../../types";
 import { Checkbox } from "../ui/Checkbox";
 import { PriorityMarker } from "../ui/PriorityMarker";
-import { TaskAssigneeAvatar, TaskDueLabel } from "./TaskParts";
+import { TaskAssigneeAvatar, TaskDueLabel, TaskRepeatMeta, type TaskRepeatInfo } from "./TaskParts";
 
 /** «Sync läuft» shows only after a write has been pending this long (B14). */
 export const SYNC_RING_DELAY_MS = 1000;
@@ -25,6 +25,8 @@ export interface TaskRowProps {
   selected?: boolean;
   /** Phones hide the date in the «Heute» group (B11). */
   hideDue?: boolean;
+  /** Recurring task: rule and rotation in the meta line (Phase 4 B10). */
+  repeat?: TaskRepeatInfo;
   first: boolean;
 }
 
@@ -44,6 +46,7 @@ export function TaskRow({
   onOpen,
   selected = false,
   hideDue = false,
+  repeat,
   first,
 }: TaskRowProps) {
   const syncing = useDelayedFlag(task.hasPendingWrites, SYNC_RING_DELAY_MS);
@@ -94,7 +97,8 @@ export function TaskRow({
           >
             {title}
           </button>
-          <span className="flex shrink-0 items-center gap-3.5 text-[13px] text-ink-muted">
+          <span className="flex shrink-0 items-center gap-3.5 text-[13px] text-ink-muted tabular-nums">
+            {repeat && <TaskRepeatMeta repeat={repeat} />}
             <TaskDueLabel
               dueDate={task.dueDate}
               today={today}
@@ -113,9 +117,12 @@ export function TaskRow({
           className="flex min-w-0 flex-1 cursor-pointer flex-col gap-0.5 py-0.5 text-left focus-visible:outline-offset-2"
         >
           {title}
-          {!hideDue && task.dueDate !== null && (
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[18px] text-ink-muted">
-              <TaskDueLabel dueDate={task.dueDate} today={today} timeZone={timeZone} />
+          {((!hideDue && task.dueDate !== null) || repeat) && (
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] leading-[18px] text-ink-muted tabular-nums">
+              {!hideDue && task.dueDate !== null && (
+                <TaskDueLabel dueDate={task.dueDate} today={today} timeZone={timeZone} />
+              )}
+              {repeat && <TaskRepeatMeta repeat={repeat} />}
             </span>
           )}
         </button>

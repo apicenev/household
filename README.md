@@ -41,7 +41,7 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
-`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). Running it again keeps the household and replaces the code once it has expired.
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna. Running it again keeps the household and replaces the code once it has expired.
 
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
@@ -80,6 +80,7 @@ To remove someone: disable or delete the account (an open session can stay valid
 | `npm run emulators`               | Start the Auth + Firestore emulators with the UI (keeps data)   |
 | `npm run seed`                    | Create the test accounts in the emulators                       |
 | `npm run seed -- --household`     | … plus «Musterstrasse 12» with tasks for Nevio; prints the code |
+| `npm run seed -- --with-anna`     | … plus Anna as a member («Bad putzen» rotates Nevio → Anna)     |
 | `npm run build`                   | Type-check and build to `dist/`                                 |
 | `npm run preview`                 | Serve the production build locally                              |
 | `npm run typecheck`               | TypeScript only                                                 |
@@ -101,9 +102,11 @@ All app data belongs to a **household**; a user belongs to at most one (`users/{
 
 ```text
 users/{uid}                          own profile: name, initials, avatar colour, householdId
-households/{hid}                     name, ownerId, memberIds[], weekStartsOn, timeZone, inviteCode, inviteCreatedAt
+households/{hid}                     name, ownerId, memberIds[], weekStartsOn, timeZone, rotationOrder?, inviteCode, inviteCreatedAt
 households/{hid}/members/{uid}       profile copy for display, role (owner | member), joinedAt
-households/{hid}/tasks/{taskId}      title, notes?, assigneeId, dueDate ("YYYY-MM-DD"), priority, status, completedAt/By
+households/{hid}/tasks/{taskId}      title, notes?, assigneeId, dueDate ("YYYY-MM-DD"), priority, status, completedAt/By,
+                                     recurring: recurrence, rotation?, seriesId, seriesIndex
+                                     (next occurrence id «{seriesId}-{seriesIndex}», created on completion)
 households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned; later shopping, events)
 invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
 ```
@@ -114,6 +117,7 @@ invites/{code}                       code lookup (ABC-1234) with a small preview
 - Joining requires the household's **current, unexpired** code (7 days after `inviteCreatedAt`, server time) and adds only the caller. Codes can be read one at a time by any signed-in user, never listed.
 - Multi-document writes (create, join, new code, profile edits) are single batches, and the rules cross-check the other documents of the batch with `getAfter()`, so an incomplete batch is rejected as a whole.
 - Every member reads and writes every task; the rules validate the fields (title 1–200, notes ≤ 2000, priority, date format, assignee is a member) and the status changes (complete sets `completedBy` = caller and server time; reopen removes both).
+- Recurring tasks: the rules validate the rule (frequencies, interval 1–52, weekdays, day / month), the rotation (current members, no duplicates, the assignee is the member at `index`), that a rule has a due date, and the series ids. Completing an occurrence and creating the next one is one batch; the next occurrence's fixed id means a second completion or «Nur diese» can't create it twice.
 - Task activity entries must match the task after the batch (title snapshot, «done» for a completion).
 - Activity entries are append-only; everything not matched is denied.
 
