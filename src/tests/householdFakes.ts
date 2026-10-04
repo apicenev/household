@@ -1,6 +1,17 @@
 import { vi } from "vitest";
 import type { RecurrenceContext } from "../domain/tasks";
-import type { Household, Member, NewTaskInput, Task, TaskChanges, UserProfile } from "../types";
+import type {
+  Household,
+  ItemStat,
+  Member,
+  NewShoppingItemInput,
+  NewTaskInput,
+  ShoppingItem,
+  ShoppingItemChanges,
+  Task,
+  TaskChanges,
+  UserProfile,
+} from "../types";
 
 /**
  * In-memory stand-ins for the household, member and invite services, for component and
@@ -66,6 +77,24 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
   };
 }
 
+let itemSeq = 0;
+
+/** A shopping item as the provider exposes it; open «Lebensmittel» by default. */
+export function makeItem(overrides: Partial<ShoppingItem> = {}): ShoppingItem {
+  itemSeq += 1;
+  return {
+    id: `item${itemSeq}`,
+    name: `Artikel ${itemSeq}`,
+    category: "groceries",
+    checked: false,
+    createdBy: "nevio",
+    createdAt: new Date(Date.UTC(2026, 8, 1, 10, 0, itemSeq)),
+    updatedAt: new Date(Date.UTC(2026, 8, 1, 10, 0, itemSeq)),
+    hasPendingWrites: false,
+    ...overrides,
+  };
+}
+
 export const defaultMembers = (): Member[] => [
   makeMember({ uid: "anna", displayName: "Anna", initials: "AN" }),
   makeMember({
@@ -94,11 +123,19 @@ export const fakeStore = {
   tasksError: null as Error | null,
   /** The task listener doesn't answer until emitTasks() (D13). */
   holdTasks: false,
+  items: [] as ShoppingItem[],
+  itemStats: [] as ItemStat[],
+  /** When set, only the shopping listener fails with it. */
+  itemsError: null as Error | null,
+  /** The shopping listener doesn't answer until emitItems() (D38). */
+  holdItems: false,
   /** Listeners don't answer until emit() (loading state). */
   hold: false,
   householdListeners: new Set<Listener<Household | null>>(),
   memberListeners: new Set<Listener<Member[]>>(),
   taskListeners: new Set<Listener<Task[]>>(),
+  itemListeners: new Set<Listener<ShoppingItem[]>>(),
+  statListeners: new Set<Listener<ItemStat[]>>(),
   /** Household ids in subscription / unsubscription order. */
   subscribed: [] as string[],
   unsubscribed: [] as string[],
@@ -111,6 +148,12 @@ export const fakeStore = {
     this.tasksError = null;
     this.hold = false;
     this.holdTasks = false;
+    this.items = [];
+    this.itemStats = [];
+    this.itemsError = null;
+    this.holdItems = false;
+    this.itemListeners.clear();
+    this.statListeners.clear();
     this.householdListeners.clear();
     this.memberListeners.clear();
     this.taskListeners.clear();
@@ -123,6 +166,20 @@ export const fakeStore = {
     for (const listener of this.householdListeners) deliverHousehold(listener);
     for (const listener of this.memberListeners) deliverMembers(listener);
     this.emitTasks();
+    this.emitItems();
+  },
+
+  /** Delivers the current shopping items and stats to their listeners. */
+  emitItems() {
+    for (const listener of this.itemListeners) deliverItems(listener);
+    for (const listener of this.statListeners) listener.onChange(this.itemStats);
+  },
+
+  /** Replaces the shopping items (and optionally the stats) and delivers them. */
+  setItems(items: ShoppingItem[], itemStats?: ItemStat[]) {
+    this.items = items;
+    if (itemStats) this.itemStats = itemStats;
+    this.emitItems();
   },
 
   /** Delivers the current tasks to every task listener. */
@@ -140,6 +197,11 @@ export const fakeStore = {
 function deliverTasks(listener: Listener<Task[]>) {
   if (fakeStore.tasksError) listener.onError(fakeStore.tasksError);
   else listener.onChange(fakeStore.tasks);
+}
+
+function deliverItems(listener: Listener<ShoppingItem[]>) {
+  if (fakeStore.itemsError) listener.onError(fakeStore.itemsError);
+  else listener.onChange(fakeStore.items);
 }
 
 function deliverHousehold(listener: Listener<Household | null>) {
@@ -231,4 +293,61 @@ export const taskServiceMock = {
   deleteOccurrence:
     vi.fn<(hid: string, task: Task, actorId: string, ctx: RecurrenceContext) => Promise<void>>(),
   deleteSeries: vi.fn<(hid: string, task: Task) => Promise<void>>(),
+};
+
+export const shoppingServiceMock = {
+  BATCH_LIMIT: 500,
+  listenToItems: (
+    hid: string,
+    onChange: (items: ShoppingItem[]) => void,
+    onError: (error: Error) => void,
+  ) => {
+    const listener = { hid, onChange, onError };
+    fakeStore.itemListeners.add(listener);
+    if (!fakeStore.holdItems) deliverItems(listener);
+    return () => {
+      fakeStore.itemListeners.delete(listener);
+    };
+  },
+  listenToItemStats: (
+    hid: string,
+    onChange: (stats: ItemStat[]) => void,
+    onError: (error: Error) => void,
+  ) => {
+    const listener = { hid, onChange, onError };
+    fakeStore.statListeners.add(listener);
+    if (!fakeStore.holdItems) onChange(fakeStore.itemStats);
+    return () => {
+      fakeStore.statListeners.delete(listener);
+    };
+  },
+  addItem:
+    vi.fn<
+      (
+        hid: string,
+        input: NewShoppingItemInput,
+        actorId: string,
+      ) => { id: string; committed: Promise<void> }
+    >(),
+  readdItem:
+    vi.fn<
+      (
+        hid: string,
+        checkedItem: ShoppingItem,
+        actorId: string,
+      ) => { id: string; committed: Promise<void> }
+    >(),
+  updateItem: vi.fn<(hid: string, itemId: string, changes: ShoppingItemChanges) => Promise<void>>(),
+  deleteItem: vi.fn<(hid: string, itemId: string) => Promise<void>>(),
+  checkItem: vi.fn<(hid: string, item: ShoppingItem, actorId: string) => Promise<void>>(),
+  uncheckItem:
+    vi.fn<(hid: string, item: ShoppingItem, stat: ItemStat | undefined) => Promise<void>>(),
+  clearCompleted:
+    vi.fn<
+      (
+        hid: string,
+        items: readonly ShoppingItem[],
+      ) => { removed: ShoppingItem[]; committed: Promise<void> }
+    >(),
+  restoreItems: vi.fn<(hid: string, items: readonly ShoppingItem[]) => Promise<void>>(),
 };

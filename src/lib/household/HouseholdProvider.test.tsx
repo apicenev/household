@@ -1,6 +1,6 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeStore, makeMember, makeTask } from "../../tests/householdFakes";
+import { fakeStore, makeItem, makeMember, makeTask } from "../../tests/householdFakes";
 import { HouseholdProvider } from "./HouseholdProvider";
 import { useHousehold } from "./useHousehold";
 
@@ -13,6 +13,9 @@ vi.mock("../../services/memberService", () =>
 );
 vi.mock("../../services/taskService", () =>
   import("../../tests/householdFakes").then((fakes) => fakes.taskServiceMock),
+);
+vi.mock("../../services/shoppingService", () =>
+  import("../../tests/householdFakes").then((fakes) => fakes.shoppingServiceMock),
 );
 
 function TasksProbe() {
@@ -33,6 +36,27 @@ function TasksProbe() {
     </>
   );
 }
+
+function ItemsProbe() {
+  const { items, itemsLoading, itemsError, retryItems, itemStats } = useHousehold();
+  return (
+    <>
+      <output data-testid="items">
+        {JSON.stringify({
+          items: items.map((item) => item.id),
+          itemsLoading,
+          itemsError: itemsError?.message ?? null,
+          stats: itemStats.map((stat) => stat.key),
+        })}
+      </output>
+      <button type="button" onClick={retryItems}>
+        retryItems
+      </button>
+    </>
+  );
+}
+
+const items = () => JSON.parse(screen.getByTestId("items").textContent ?? "{}");
 
 function Probe() {
   const { household, members, me, isOwner, memberById, loading, error } = useHousehold();
@@ -58,6 +82,7 @@ function renderProvider(uid: string) {
     <HouseholdProvider householdId="h1" uid={uid}>
       <Probe />
       <TasksProbe />
+      <ItemsProbe />
     </HouseholdProvider>,
   );
 }
@@ -163,5 +188,45 @@ describe("HouseholdProvider", () => {
     expect(fakeStore.taskListeners.size).toBe(1);
     unmount();
     expect(fakeStore.taskListeners.size).toBe(0);
+  });
+
+  it("exposes the shopping list with its own loading state, without blocking the shell", () => {
+    fakeStore.holdItems = true;
+    renderProvider("nevio");
+    expect(items()).toEqual({ items: [], itemsLoading: true, itemsError: null, stats: [] });
+    expect(state().loading).toBe(false);
+    fakeStore.items = [makeItem({ id: "milk" })];
+    fakeStore.itemStats = [
+      { key: "milch", name: "Milch", category: "groceries", count: 3, lastPurchasedAt: new Date() },
+    ];
+    act(() => fakeStore.emitItems());
+    expect(items()).toEqual({
+      items: ["milk"],
+      itemsLoading: false,
+      itemsError: null,
+      stats: ["milch"],
+    });
+  });
+
+  it("reports a shopping listener error separately and retries it", () => {
+    fakeStore.itemsError = new Error("boom");
+    renderProvider("nevio");
+    expect(state()).toMatchObject({ loading: false, error: null });
+    expect(items()).toMatchObject({ itemsLoading: false, itemsError: "boom" });
+    fakeStore.itemsError = null;
+    fakeStore.items = [makeItem({ id: "milk" })];
+    act(() => screen.getByRole("button", { name: "retryItems" }).click());
+    expect(items()).toMatchObject({ items: ["milk"], itemsError: null });
+    expect(fakeStore.itemListeners.size).toBe(1);
+    expect(fakeStore.statListeners.size).toBe(1);
+  });
+
+  it("unsubscribes the shopping listeners on unmount", () => {
+    const { unmount } = renderProvider("nevio");
+    expect(fakeStore.itemListeners.size).toBe(1);
+    expect(fakeStore.statListeners.size).toBe(1);
+    unmount();
+    expect(fakeStore.itemListeners.size).toBe(0);
+    expect(fakeStore.statListeners.size).toBe(0);
   });
 });

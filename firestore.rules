@@ -11,7 +11,9 @@ rules_version = '2';
 //   households/{hid}                   members read, owner updates            (Phase 2)
 //   households/{hid}/members           members read, own doc only             (Phase 2)
 //   households/{hid}/tasks             members CRUD, validated                (Phases 3, 4)
-//   households/{hid}/shoppingItems|itemStats|events                           (Phases 5–7)
+//   households/{hid}/shoppingItems     members CRUD, validated                (Phase 5)
+//   households/{hid}/itemStats         members create / count ±1, no delete   (Phase 5)
+//   households/{hid}/events                                                   (Phases 6, 7)
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
@@ -93,6 +95,19 @@ service cloud.firestore {
 
     function validAvatarColor(value) {
       return value is int && value >= 1 && value <= 8;
+    }
+
+    // Shopping item names (Phase 5 B3): the client cleans them on save, so they never start
+    // or end with whitespace, have no runs of it and no whitespace other than a plain space
+    // (RE2's \s is ASCII-only, which is why the client also turns NBSP and other Unicode
+    // spaces into plain spaces).
+    function validShopName(value) {
+      return value is string && value.size() >= 1 && value.size() <= 100
+        && !value.matches('(?s)(\\s.*|.*\\s|.*\\s\\s.*|.*[^ \\S].*)');
+    }
+
+    function validShopCategory(value) {
+      return value in ['groceries', 'household', 'pharmacy', 'other'];
     }
 
     // users/{uid}: own profile only.
@@ -470,10 +485,138 @@ service cloud.firestore {
         allow delete: if isMember(hid);
       }
 
+      // shoppingItems/{itemId} (Phase 5 B1): every member reads and writes every item. A write
+      // either edits fields, checks (open → checked, by oneself, at server time) or unchecks.
+      // A create is a new open item, or the restore of a checked one after «Gekaufte
+      // entfernen» (B7). The item rules never look at itemStats, so an uncheck without a
+      // stats change is valid (B6).
+      match /shoppingItems/{itemId} {
+        function validQuantity(value) {
+          return value is string && value.size() >= 1 && value.size() <= 30;
+        }
+
+        function validItemNotes(value) {
+          return value is string && value.size() >= 1 && value.size() <= 500;
+        }
+
+        function validNewItem() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['name', 'quantity', 'notes', 'category', 'checked',
+                                      'checkedAt', 'checkedBy', 'createdBy', 'createdAt',
+                                      'updatedAt'])
+            && data.keys().hasAll(['name', 'category', 'checked', 'createdBy', 'createdAt',
+                                   'updatedAt'])
+            && validShopName(data.name)
+            && (!('quantity' in data) || validQuantity(data.quantity))
+            && (!('notes' in data) || validItemNotes(data.notes))
+            && validShopCategory(data.category)
+            && data.createdAt == request.time
+            && data.updatedAt == request.time
+            && ((data.checked == false
+                && data.createdBy == request.auth.uid
+                && !('checkedAt' in data)
+                && !('checkedBy' in data))
+              // Restore (B7): as it was, checked, possibly created and bought by others.
+              || (data.checked == true
+                && data.createdBy is string && data.createdBy.size() >= 1
+                && data.get('checkedBy', null) is string && data.checkedBy.size() >= 1
+                && data.get('checkedAt', null) is timestamp
+                && data.checkedAt <= request.time));
+        }
+
+        function isItemEdit() {
+          let data = request.resource.data;
+          let changed = changedKeys();
+          return changed.hasOnly(['name', 'quantity', 'notes', 'category', 'updatedAt'])
+            && data.updatedAt == request.time
+            && (!('name' in changed) || validShopName(data.name))
+            && (!('quantity' in changed) || !('quantity' in data)
+              || validQuantity(data.quantity))
+            && (!('notes' in changed) || !('notes' in data) || validItemNotes(data.notes))
+            && (!('category' in changed) || validShopCategory(data.category));
+        }
+
+        function isItemCheck() {
+          let data = request.resource.data;
+          return resource.data.checked == false
+            && data.checked == true
+            && changedKeys().hasOnly(['checked', 'checkedAt', 'checkedBy', 'updatedAt'])
+            && data.checkedAt == request.time
+            && data.checkedBy == request.auth.uid
+            && data.updatedAt == request.time;
+        }
+
+        function isItemUncheck() {
+          let data = request.resource.data;
+          return resource.data.checked == true
+            && data.checked == false
+            && changedKeys().hasOnly(['checked', 'checkedAt', 'checkedBy', 'updatedAt'])
+            && !('checkedAt' in data)
+            && !('checkedBy' in data)
+            && data.updatedAt == request.time;
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isMember(hid) && validNewItem();
+        allow update: if isMember(hid) && (isItemEdit() || isItemCheck() || isItemUncheck());
+        allow delete: if isMember(hid);
+      }
+
+      // itemStats/{key} (Phase 5 B1, B6): purchase history for the suggestions. The id is the
+      // lowercased name with «/» as «∕» (statKey in src/domain/shopping.ts; the name is
+      // already cleaned, B3). A purchase creates it with count 1 or adds 1; an uncheck takes
+      // 1 away (best effort, never below 0). Never deleted: it outlives «Gekaufte entfernen».
+      match /itemStats/{key} {
+        // lower() only lowercases ASCII letters («ÄPFEL» stays «ÄPFEL», emulator-tested), so
+        // the key is checked exactly for ASCII names only; for other names it only has to be
+        // a plausible id (fallback in Phase 5 §5.4). The key can never block a check-off.
+        function keyMatches(name) {
+          return key == name.lower().replace('/', '∕')
+            || (name.matches('(?s).*[^\\x00-\\x7F].*') && key.size() >= 1 && key.size() <= 200);
+        }
+
+        function validNewStat() {
+          let data = request.resource.data;
+          return data.keys().hasOnly(['name', 'category', 'count', 'lastPurchasedAt'])
+            && data.keys().hasAll(['name', 'category', 'count', 'lastPurchasedAt'])
+            && validShopName(data.name)
+            && validShopCategory(data.category)
+            && keyMatches(data.name)
+            && data.count == 1
+            && data.lastPurchasedAt == request.time;
+        }
+
+        function isPurchase() {
+          let data = request.resource.data;
+          return changedKeys().hasOnly(['name', 'category', 'count', 'lastPurchasedAt'])
+            && data.count == resource.data.count + 1
+            && data.lastPurchasedAt == request.time
+            && validShopName(data.name)
+            && validShopCategory(data.category)
+            && keyMatches(data.name);
+        }
+
+        function isUnpurchase() {
+          let data = request.resource.data;
+          return changedKeys().hasOnly(['count'])
+            && data.count == resource.data.count - 1
+            && data.count >= 0;
+        }
+
+        allow get, list: if isMember(hid);
+        allow create: if isMember(hid) && validNewStat();
+        allow update: if isMember(hid) && (isPurchase() || isUnpurchase());
+        allow delete: if false;
+      }
+
       // activity/{id}: append-only (ACT-06).
       match /activity/{activityId} {
         function taskPath(taskId) {
           return /databases/$(database)/documents/households/$(hid)/tasks/$(taskId);
+        }
+
+        function itemPath(itemId) {
+          return /databases/$(database)/documents/households/$(hid)/shoppingItems/$(itemId);
         }
 
         function nullableString(value) {
@@ -506,6 +649,20 @@ service cloud.firestore {
               || (data.type != 'task_assigned' && !('details' in data)));
         }
 
+        // Shopping entries (Phase 5 B11): written in the same batch as the item, whose name
+        // after the batch is the snapshot; «item_added» needs an open item, «item_purchased»
+        // a checked one.
+        function validItemActivity(data) {
+          let item = itemPath(data.targetId);
+          return data.type in ['item_added', 'item_purchased']
+            && data.targetType == 'item'
+            && isMember(hid)
+            && existsAfter(item)
+            && getAfter(item).data.name == data.targetTitle
+            && getAfter(item).data.checked == (data.type == 'item_purchased')
+            && !('details' in data);
+        }
+
         function validMemberJoined(data) {
           let uid = request.auth.uid;
           return data.type == 'member_joined'
@@ -528,7 +685,7 @@ service cloud.firestore {
             && data.targetType is string
             && data.targetId is string
             && data.targetTitle is string
-            && (validMemberJoined(data) || validTaskActivity(data));
+            && (validMemberJoined(data) || validTaskActivity(data) || validItemActivity(data));
         }
 
         allow get, list: if isMember(hid);

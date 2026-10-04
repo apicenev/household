@@ -18,6 +18,9 @@ vi.mock("../services/memberService", () =>
 vi.mock("../services/taskService", () =>
   import("./householdFakes").then((fakes) => fakes.taskServiceMock),
 );
+vi.mock("../services/shoppingService", () =>
+  import("./householdFakes").then((fakes) => fakes.shoppingServiceMock),
+);
 
 // Wednesday 30 Sept 2026, 10:00 in Zurich. Only Date is faked; timers stay real.
 const NOW = new Date("2026-09-30T08:00:00Z");

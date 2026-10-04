@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { Household, Member, Task } from "../../types";
+import type { Household, ItemStat, Member, ShoppingItem, Task } from "../../types";
 
 export interface HouseholdContextValue {
   /** null while loading or after an error. */
@@ -24,6 +24,16 @@ export interface HouseholdContextValue {
   tasksError: Error | null;
   /** Subscribes to the tasks again after an error. */
   retryTasks: () => void;
+  /** All shopping items, open and checked, unsorted (see domain/shopping). */
+  items: ShoppingItem[];
+  /** True until the first shopping snapshot has arrived (D38). */
+  itemsLoading: boolean;
+  /** Shopping listener error (D39); doesn't affect `error`. */
+  itemsError: Error | null;
+  /** Subscribes to the shopping list again after an error. */
+  retryItems: () => void;
+  /** Purchase history for the suggestions (B9); empty until loaded or after an error. */
+  itemStats: ItemStat[];
 }
 
 export const HouseholdContext = createContext<HouseholdContextValue | null>(null);

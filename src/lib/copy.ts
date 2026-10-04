@@ -198,6 +198,75 @@ export const taskCopy = {
     `${open} offen · ${overdue} überfällig · ${today} heute fällig`,
 } as const;
 
+/** Shopping wording (Phase 5): `Shopping`, Artikel-Sheet, Schnellerfassung, D34–D44. */
+export const shoppingCopy = {
+  addLabel: "Artikel hinzufügen",
+  addPlaceholderDesktop: "Artikel hinzufügen und Enter drücken",
+  addButton: "Hinzufügen",
+  suggestions: "Vorschläge",
+  empty: "Alles im Wagen",
+  emptyText: "Füge oben etwas hinzu oder wähle aus «Oft gekauft».",
+  loadError: "Einkauf konnte nicht geladen werden.",
+  deletedElsewhere: "Dieser Artikel wurde gelöscht.",
+  editItem: "Artikel bearbeiten",
+  deleteItem: "Artikel löschen",
+  name: "Name",
+  quantity: "Menge",
+  unit: "Einheit",
+  category: "Kategorie",
+  notes: "Notizen",
+  less: "Weniger",
+  more: "Mehr",
+  /** D37: stepper value without a quantity. */
+  noQuantity: "–",
+  nameEmpty: "Gib einen Namen ein.",
+  nameTooLong: "Der Name darf höchstens 100 Zeichen lang sein.",
+  nameReserved: "Diesen Namen kann ich nicht speichern.",
+  /** B4: rename to another open item. */
+  nameDuplicate: "Steht schon auf der Liste.",
+  pending: "Warte auf Sync",
+  pendingNew: "Warte auf Sync · neu",
+  pendingChecked: "Warte auf Sync · gekauft",
+  quickAddPlaceholder: "Was braucht ihr?",
+  quickAddCta: "Auf die Liste",
+  /** Top bar «4 offen» / «Alles erledigt» (B13). */
+  openCount: (open: number) => (open === 0 ? "Alles erledigt" : `${open} offen`),
+  /** Suggestion row ««Mi» hinzufügen» (B9). */
+  addRow: (query: string) => `«${query}» hinzufügen`,
+  /** Suggestion meta «12× gekauft». */
+  timesBought: (count: number) => `${count}× gekauft`,
+  /** «Oft gekauft» chip and Schnellerfassung chip label for screen readers. */
+  addNamed: (name: string) => `${name} hinzufügen`,
+  checkLabel: (name: string) => `${name} als gekauft markieren`,
+  uncheckLabel: (name: string) => `${name} zurück auf die Liste`,
+  boughtSection: (count: number) => `${terms.purchased} (${count})`,
+  boughtBy: (name: string) => `von ${name}`,
+  /** B2: a stored quantity the stepper can't show, until the stepper is touched. */
+  previousQuantity: (quantity: string) => `Bisher: ${quantity}`,
+  /** D36 */
+  duplicateHint: (name: string) => `${name} steht schon auf der Liste.`,
+  purchasedToast: (name: string) => `«${name}» gekauft`,
+  deletedToast: (name: string) => `«${name}» gelöscht`,
+  /** D41 */
+  clearedToast: (count: number) => `${count} Artikel entfernt`,
+  /** Schnellerfassung status line (D43). */
+  addedStatus: (name: string) => `«${name}» zum Einkauf hinzugefügt`,
+  /**
+   * Desktop summary (D42): «4 offen · 4 im Wagen · mit Anna geteilt». `others` are the other
+   * members' names; alone, the last part is left out.
+   */
+  summary: (open: number, bought: number, others: readonly string[]) => {
+    const base = `${open} offen · ${bought} im Wagen`;
+    if (others.length === 0) return base;
+    const rest = others.length - 2;
+    const shared =
+      rest > 0
+        ? `${others[0]}, ${others[1]} und ${rest} ${rest === 1 ? "weiteren Person" : "weiteren Personen"}`
+        : new Intl.ListFormat("de-CH", { type: "conjunction" }).format(others);
+    return `${base} · mit ${shared} geteilt`;
+  },
+} as const;
+
 /** RecurrencePicker and RotationPicker (Phase 4, `RecurrencePicker.dc.html`, `Sheets`). */
 export const recurrenceCopy = {
   label: terms.repeat,

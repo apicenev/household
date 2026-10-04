@@ -149,7 +149,8 @@ export function QuickAddTaskForm({
   );
 }
 
-function QuickChip({
+/** A chip of the Schnellerfassung (also used by «Einkauf», Phase 5 D43). */
+export function QuickChip({
   selected,
   onClick,
   leading,

@@ -14,6 +14,8 @@ export type TopBarProps =
       variant?: "root";
       /** Page title; omit for the brand header on Start. */
       title?: string;
+      /** Muted text after the title, e.g. «4 offen» on Einkauf (`Shopping.dc.html`). */
+      subtitle?: string;
       className?: string;
     }
   | {
@@ -67,7 +69,14 @@ export function TopBar(props: TopBarProps) {
       ) : (
         <div className="flex h-14 items-center justify-between pr-2 pl-4">
           {props.title ? (
-            <span className="truncate font-display text-title">{props.title}</span>
+            <span className="flex min-w-0 items-baseline gap-2.5">
+              <span className="truncate font-display text-title">{props.title}</span>
+              {props.subtitle && (
+                <span className="shrink-0 text-body-sm text-ink-muted tabular-nums">
+                  {props.subtitle}
+                </span>
+              )}
+            </span>
           ) : (
             <span className="flex items-center gap-2">
               <span

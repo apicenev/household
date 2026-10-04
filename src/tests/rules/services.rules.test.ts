@@ -1,7 +1,16 @@
 import { type RulesTestEnvironment } from "@firebase/rules-unit-testing";
-import { doc, getDoc, getDocs, collection, updateDoc, type Firestore } from "firebase/firestore";
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  type Firestore,
+} from "firebase/firestore";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Household, Task, UserProfile } from "../../types";
+import type { Household, ItemStat, ShoppingItem, Task, UserProfile } from "../../types";
 import {
   DAY_MS,
   anna,
@@ -41,6 +50,16 @@ const {
   updateTask,
 } = await import("../../services/taskService");
 const { taskConverter } = await import("../../lib/converters/taskConverter");
+const {
+  addItem,
+  checkItem,
+  clearCompleted,
+  listenToItemStats,
+  listenToItems,
+  readdItem,
+  restoreItems,
+  uncheckItem,
+} = await import("../../services/shoppingService");
 
 let env: RulesTestEnvironment;
 
@@ -471,5 +490,124 @@ describe("recurring task services against the rules (Phase 4)", () => {
     const household = await readHousehold(hid);
     await updateHouseholdSettings(household, { rotationOrder: ["anna", "nevio"] });
     expect((await readHousehold(hid)).rotationOrder).toEqual(["anna", "nevio"]);
+  });
+});
+
+describe("shopping services against the rules (Phase 5)", () => {
+  const hid = "h1";
+
+  beforeEach(async () => {
+    await seedHousehold(env, { members: [anna] });
+  });
+
+  /** Live items and stats as Anna's provider would see them. */
+  function watch() {
+    const live = { items: [] as ShoppingItem[], stats: [] as ItemStat[] };
+    signInAs(anna);
+    const fail = (error: Error) => {
+      throw error;
+    };
+    const stopItems = listenToItems(hid, (items) => (live.items = items), fail);
+    const stopStats = listenToItemStats(hid, (stats) => (live.stats = stats), fail);
+    return { live, stop: () => (stopItems(), stopStats()) };
+  }
+
+  const milkCount = (stats: ItemStat[]) => stats.find((s) => s.key === "milch")?.count;
+
+  it("add → check → uncheck → check → re-add → check → clear → restore (B4, B6, B7)", async () => {
+    const { live, stop } = watch();
+
+    signInAs(nevio);
+    const { id, committed } = addItem(hid, { name: " Milch ", category: "groceries" }, "nevio");
+    await committed;
+    await vi.waitFor(() => expect(live.items.map((i) => i.name)).toEqual(["Milch"]));
+
+    signInAs(anna);
+    await checkItem(hid, live.items[0], "anna");
+    await vi.waitFor(() => expect(milkCount(live.stats)).toBe(1));
+    expect(live.items[0]).toMatchObject({ checked: true, checkedBy: "anna" });
+
+    await uncheckItem(hid, live.items[0], live.stats[0]);
+    await vi.waitFor(() => expect(milkCount(live.stats)).toBe(0));
+    expect(live.items[0].checked).toBe(false);
+
+    await checkItem(hid, live.items[0], "anna");
+    await vi.waitFor(() => expect(milkCount(live.stats)).toBe(1));
+    await vi.waitFor(() => expect(live.items[0].checked).toBe(true));
+
+    // Re-add from the bar: new id, old one gone, stats untouched.
+    signInAs(nevio);
+    const readd = readdItem(hid, live.items[0], "nevio");
+    await readd.committed;
+    await vi.waitFor(() => expect(live.items.map((i) => i.id)).toEqual([readd.id]));
+    expect(readd.id).not.toBe(id);
+    expect(live.items[0]).toMatchObject({ checked: false, createdBy: "nevio" });
+    expect(milkCount(live.stats)).toBe(1);
+
+    signInAs(anna);
+    await checkItem(hid, live.items[0], "anna");
+    await vi.waitFor(() => expect(milkCount(live.stats)).toBe(2));
+    await vi.waitFor(() => expect(live.items[0].checked).toBe(true));
+
+    // Clear (as Nevio, who didn't buy it), stats stay; restore brings the item back as it was.
+    signInAs(nevio);
+    const cleared = clearCompleted(hid, live.items);
+    await cleared.committed;
+    await vi.waitFor(() => expect(live.items).toEqual([]));
+    expect(milkCount(live.stats)).toBe(2);
+    await restoreItems(hid, cleared.removed);
+    await vi.waitFor(() =>
+      expect(live.items[0]).toMatchObject({ id: readd.id, checked: true, checkedBy: "anna" }),
+    );
+    stop();
+
+    const types: string[] = [];
+    await asAdmin(env, async (db) => {
+      const snapshot = await getDocs(collection(db, "households", hid, "activity"));
+      types.push(...snapshot.docs.map((d) => d.data().type as string).sort());
+    });
+    expect(types).toEqual([
+      "item_added",
+      "item_added",
+      "item_purchased",
+      "item_purchased",
+      "item_purchased",
+    ]);
+  });
+
+  it("unchecks an item without a stats doc (seeded, B6)", async () => {
+    await asAdmin(env, async (db) => {
+      const now = new Date();
+      await setDoc(doc(db, "households", hid, "shoppingItems", "oil"), {
+        name: "Olivenöl",
+        category: "groceries",
+        checked: true,
+        checkedAt: now,
+        checkedBy: "nevio",
+        createdBy: "nevio",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+    const { live, stop } = watch();
+    await vi.waitFor(() => expect(live.items).toHaveLength(1));
+    // The provider knows no stats doc, so no stats write is even sent.
+    await uncheckItem(hid, live.items[0], undefined);
+    await vi.waitFor(() => expect(live.items[0].checked).toBe(false));
+    // And a stale count of 1 for a missing doc: the −1 is rejected, the uncheck still stands.
+    await checkItem(hid, live.items[0], "anna");
+    await vi.waitFor(() => expect(live.items[0].checked).toBe(true));
+    await asAdmin(env, (db) => deleteDoc(doc(db, "households", hid, "itemStats", "olivenöl")));
+    await expect(
+      uncheckItem(hid, live.items[0], {
+        key: "olivenöl",
+        name: "Olivenöl",
+        category: "groceries",
+        count: 1,
+        lastPurchasedAt: new Date(),
+      }),
+    ).resolves.toBeUndefined();
+    await vi.waitFor(() => expect(live.items[0].checked).toBe(false));
+    stop();
   });
 });
