@@ -1,4 +1,4 @@
-import { CalendarIcon, CheckCircleIcon, FlagIcon } from "@heroicons/react/16/solid";
+import { ArrowPathIcon, CalendarIcon, CheckCircleIcon, FlagIcon } from "@heroicons/react/16/solid";
 import { CheckCircleIcon as CheckCircleOutline } from "@heroicons/react/24/outline";
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { DEFAULT_PRIORITY, MAX_TASK_TITLE, todayKey } from "../../domain/tasks";
@@ -22,7 +22,8 @@ const noChips: Chips = { today: false, assigneeId: null, high: false };
  * Schnellerfassung «Aufgabe» (`Sheets.dc.html`, B13): title, chips «Heute» / members /
  * «Hoch», «Aufgabe hinzufügen». The input keeps focus after adding, so several tasks can be
  * entered in a row; «Mehr Optionen» opens the full «Neue Aufgabe» sheet with the values.
- * The member chips are a single choice (D24); «Wiederholen» follows in Phase 4.
+ * The member chips are a single choice (D24). «Wiederholen» opens the full sheet at the
+ * repeat section (Phase 4 D31); it's never «on» here.
  */
 export function QuickAddTaskForm({
   tasks,
@@ -58,10 +59,10 @@ export function QuickAddTaskForm({
     inputRef.current?.focus();
   }
 
-  function moreOptions() {
+  function moreOptions(focusRepeat = false) {
     const prefill = { ...input(), title };
     onMoreOptions();
-    tasks.openNewTask({ prefill });
+    tasks.openNewTask({ prefill, focusRepeat });
   }
 
   return (
@@ -109,6 +110,12 @@ export function QuickAddTaskForm({
           </QuickChip>
         ))}
         <QuickChip
+          onClick={() => moreOptions(true)}
+          leading={<ArrowPathIcon aria-hidden="true" className="size-4" />}
+        >
+          {terms.repeat}
+        </QuickChip>
+        <QuickChip
           selected={chips.high}
           onClick={() => setChips({ ...chips, high: !chips.high })}
           leading={<FlagIcon aria-hidden="true" className="size-4 text-priority-high" />}
@@ -119,7 +126,7 @@ export function QuickAddTaskForm({
       <div className="flex items-center justify-between gap-3">
         <button
           type="button"
-          onClick={moreOptions}
+          onClick={() => moreOptions()}
           className="flex min-h-11 cursor-pointer items-center text-[15px] font-semibold text-brand-strong hovered:text-brand-hover"
         >
           {taskCopy.moreOptions}
@@ -149,7 +156,8 @@ function QuickChip({
   avatar = false,
   children,
 }: {
-  selected: boolean;
+  /** Toggle chips; omitted for an action chip («Wiederholen»), which has no pressed state. */
+  selected?: boolean;
   onClick: () => void;
   leading: ReactNode;
   /** The leading element is a 28 px avatar (tighter left padding). */

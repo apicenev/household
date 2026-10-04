@@ -31,8 +31,16 @@ const { updateMyProfile } = await import("../../services/memberService");
 const { householdConverter } = await import("../../lib/converters/householdConverter");
 const { listenToUserProfile } = await import("../../services/userService");
 const { nextConfirmedHouseholdId } = await import("../../lib/auth/confirmedHouseholdId");
-const { completeTask, createTask, deleteTask, listenToTasks, reopenTask, updateTask } =
-  await import("../../services/taskService");
+const {
+  completeTask,
+  createTask,
+  deleteOccurrence,
+  deleteTask,
+  listenToTasks,
+  reopenTask,
+  updateTask,
+} = await import("../../services/taskService");
+const { taskConverter } = await import("../../lib/converters/taskConverter");
 
 let env: RulesTestEnvironment;
 
@@ -317,5 +325,151 @@ describe("task services against the rules", () => {
       code: "permission-denied",
     });
     expect((await activityTypes(hid)).filter((type) => type === "task_completed")).toHaveLength(1);
+  });
+});
+
+describe("recurring task services against the rules (Phase 4)", () => {
+  const hid = "h1";
+  const weeklySat = { freq: "weekly" as const, interval: 1, byWeekday: [6] };
+  const ctx = { today: "2026-10-04", weekStartsOn: 1 as const, memberIds: ["nevio", "anna"] };
+  const nameOf = (uid: string) => ({ nevio: "Nevio", anna: "Anna" })[uid];
+
+  async function readTasks(): Promise<Task[]> {
+    let tasks: Task[] = [];
+    await asAdmin(env, async (db) => {
+      const snapshot = await getDocs(
+        collection(db, "households", hid, "tasks").withConverter(taskConverter),
+      );
+      tasks = snapshot.docs.map((d) => d.data());
+    });
+    return tasks;
+  }
+
+  async function completions(): Promise<number> {
+    let count = 0;
+    await asAdmin(env, async (db) => {
+      const snapshot = await getDocs(collection(db, "households", hid, "activity"));
+      count = snapshot.docs.filter((d) => d.data().type === "task_completed").length;
+    });
+    return count;
+  }
+
+  async function createBathroom(): Promise<Task> {
+    signInAs(nevio);
+    const { id, committed } = createTask(
+      hid,
+      {
+        title: "Bad putzen",
+        assigneeId: "nevio",
+        dueDate: "2026-10-03",
+        priority: "low",
+        recurrence: weeklySat,
+        rotation: { memberIds: ["nevio", "anna"], index: 0 },
+      },
+      "nevio",
+    );
+    await committed;
+    return (await readTasks()).find((t) => t.id === id)!;
+  }
+
+  beforeEach(async () => {
+    await seedHousehold(env, { members: [anna] });
+  });
+
+  it("complete → next occurrence for Anna → undo restores the series (RTK-04/05/09/10)", async () => {
+    const first = await createBathroom();
+    expect(first.seriesId).not.toBe(first.id);
+
+    signInAs(anna);
+    await completeTask(hid, first, "anna", ctx);
+    let tasks = await readTasks();
+    const next = tasks.find((t) => t.id === `${first.seriesId}-2`)!;
+    expect(next).toMatchObject({
+      status: "open",
+      assigneeId: "anna",
+      dueDate: "2026-10-10",
+      rotation: { memberIds: ["nevio", "anna"], index: 1 },
+      seriesIndex: 2,
+    });
+    const done = tasks.find((t) => t.id === first.id)!;
+    expect(done).toMatchObject({ status: "done", recurrence: weeklySat });
+    expect(await completions()).toBe(1);
+
+    await reopenTask(hid, done, tasks);
+    tasks = await readTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ id: first.id, status: "open", recurrence: weeklySat });
+  });
+
+  it("reopen after the next was edited → normal task → a new rule works (old-series regression)", async () => {
+    const first = await createBathroom();
+    signInAs(anna);
+    await completeTask(hid, first, "anna", ctx);
+    let tasks = await readTasks();
+    const next = tasks.find((t) => t.id === `${first.seriesId}-2`)!;
+    await updateTask(hid, next, { title: "Bad gründlich putzen" }, "anna", nameOf);
+
+    tasks = await readTasks();
+    await reopenTask(
+      hid,
+      tasks.find((t) => t.id === first.id)!,
+      tasks,
+    );
+    let reopened = (await readTasks()).find((t) => t.id === first.id)!;
+    expect(reopened.status).toBe("open");
+    expect(reopened.recurrence).toBeUndefined();
+    expect(reopened.seriesId).toBe(first.seriesId);
+
+    // Same series id again would collide with «{seriesId}-2»; the service starts a new one.
+    await updateTask(hid, reopened, { recurrence: weeklySat }, "anna", nameOf);
+    reopened = (await readTasks()).find((t) => t.id === first.id)!;
+    expect(reopened.seriesId).not.toBe(first.seriesId);
+    await completeTask(hid, reopened, "anna", ctx);
+    expect((await readTasks()).some((t) => t.id === `${reopened.seriesId}-2`)).toBe(true);
+  });
+
+  it("two members complete the same occurrence: isComplete rejects the second", async () => {
+    const first = await createBathroom();
+    signInAs(anna);
+    await completeTask(hid, first, "anna", ctx);
+    signInAs(nevio);
+    await expect(completeTask(hid, first, "nevio", ctx)).rejects.toMatchObject({
+      code: "permission-denied",
+    });
+    expect((await readTasks()).filter((t) => t.status === "open")).toHaveLength(1);
+    expect(await completions()).toBe(1);
+  });
+
+  it("two «Nur diese», and completion + «Nur diese»: one next occurrence (fixed id, B5)", async () => {
+    const first = await createBathroom();
+    signInAs(anna);
+    await deleteOccurrence(hid, first, "anna", ctx);
+    signInAs(nevio);
+    await expect(deleteOccurrence(hid, first, "nevio", ctx)).rejects.toMatchObject({
+      code: "permission-denied",
+    });
+    let tasks = await readTasks();
+    expect(tasks.map((t) => t.id)).toEqual([`${first.seriesId}-2`]);
+    expect(tasks[0].assigneeId).toBe("nevio");
+
+    const second = tasks[0];
+    signInAs(anna);
+    await completeTask(hid, second, "anna", ctx);
+    signInAs(nevio);
+    await expect(deleteOccurrence(hid, second, "nevio", ctx)).rejects.toMatchObject({
+      code: "permission-denied",
+    });
+    tasks = await readTasks();
+    expect(tasks.filter((t) => t.status === "open").map((t) => t.id)).toEqual([
+      `${first.seriesId}-3`,
+    ]);
+    expect(tasks.find((t) => t.id === second.id)?.status).toBe("done");
+  });
+
+  it("the owner saves a rotation order through updateHouseholdSettings", async () => {
+    signInAs(nevio);
+    const household = await readHousehold(hid);
+    await updateHouseholdSettings(household, { rotationOrder: ["anna", "nevio"] });
+    expect((await readHousehold(hid)).rotationOrder).toEqual(["anna", "nevio"]);
   });
 });

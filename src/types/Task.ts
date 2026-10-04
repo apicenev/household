@@ -1,9 +1,11 @@
+import type { RecurrenceRule, TaskRotation } from "./Recurrence";
+
 /** Priority of a task; always set, «Niedrig» by default (TSK-01, Phase 3 B1). */
 export type TaskPriority = "low" | "medium" | "high";
 
 export type TaskStatus = "open" | "done";
 
-/** households/{hid}/tasks/{taskId} (TSK-01…09). Recurrence fields arrive in Phase 4. */
+/** households/{hid}/tasks/{taskId} (TSK-01…09, RTK-01…10). */
 export interface Task {
   id: string;
   /** 1–200 characters, trimmed. */
@@ -20,6 +22,20 @@ export interface Task {
   completedAt?: Date;
   /** Who completed it (done tasks only). */
   completedBy?: string;
+  /**
+   * Series of a recurring task: a random id per series, set when the task gets a rule
+   * (Phase 4 B5). Generated occurrences have the id «{seriesId}-{seriesIndex}».
+   */
+  seriesId?: string;
+  /** Position in the series: 1 for the first occurrence, then 2, 3, … */
+  seriesIndex?: number;
+  /**
+   * The rule. Active while the task is open; a completed occurrence keeps it as history
+   * (B7), so «recurring» means open and with a rule (`isRecurring`).
+   */
+  recurrence?: RecurrenceRule;
+  /** Rotation of the assignee (needs `recurrence`). */
+  rotation?: TaskRotation;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -35,10 +51,15 @@ export interface NewTaskInput {
   assigneeId: string | null;
   dueDate: string | null;
   priority: TaskPriority;
+  /** Omitted for a task that doesn't repeat. */
+  recurrence?: RecurrenceRule;
+  /** Omitted without rotation; needs `recurrence`. */
+  rotation?: TaskRotation;
 }
 
 /**
- * Fields an edit changes (only the changed ones, B8). `notes: null` removes the notes.
+ * Fields an edit changes (only the changed ones, B8). `null` removes notes, the rule («Nie»,
+ * end repeat; the rotation goes with it) or the rotation.
  */
 export interface TaskChanges {
   title?: string;
@@ -46,4 +67,6 @@ export interface TaskChanges {
   assigneeId?: string | null;
   dueDate?: string | null;
   priority?: TaskPriority;
+  recurrence?: RecurrenceRule | null;
+  rotation?: TaskRotation | null;
 }

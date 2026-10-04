@@ -1,10 +1,13 @@
 import { ExclamationCircleIcon, LockClosedIcon } from "@heroicons/react/16/solid";
 import { useState } from "react";
+import { defaultRotationOrder } from "../../domain/rotation";
 import { TIME_ZONES, timeZoneLabel } from "../../domain/timeZones";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
+import { recurrenceCopy } from "../../lib/copy";
 import { firestoreErrorMessage } from "../../lib/firestoreErrors";
 import { updateHouseholdSettings } from "../../services/householdService";
-import type { Household, HouseholdSettingsUpdate, WeekStart } from "../../types";
+import type { Household, HouseholdSettingsUpdate, Member, WeekStart } from "../../types";
+import { RotationPicker } from "../ui/RotationPicker";
 import { SegmentedControl } from "../ui/SegmentedControl";
 import { Select } from "../ui/Select";
 import { TextField } from "../ui/TextField";
@@ -16,27 +19,33 @@ const weekStartOptions = [
   { value: "0", label: "Sonntag" },
 ];
 
+type SettingsField = "weekStartsOn" | "timeZone" | "rotationOrder";
+
 /**
- * «Einstellungen» (HH-07): name, week start, time zone. Saved on change / blur (B1). Only the
+ * «Einstellungen» (HH-07): name, week start, time zone and, from Phase 4, the default order of
+ * new rotations (D30, hidden with a single member). Saved on change / blur (B1). Only the
  * owner may change them; members see the disabled fields and a caption (D5).
  */
 export function HouseholdSettings({
   household,
+  members,
   isOwner,
   ownerName,
 }: {
   household: Household;
+  members: Member[];
   isOwner: boolean;
   ownerName: string;
 }) {
   const desktop = useIsDesktop();
   const disabled = !isOwner;
-  const [errors, setErrors] = useState<{ weekStartsOn?: string; timeZone?: string }>({});
+  const [errors, setErrors] = useState<Partial<Record<SettingsField, string>>>({});
+  const order = defaultRotationOrder(household.rotationOrder, members, null);
   const name = useAutosaveName(household.name, (value) =>
     updateHouseholdSettings(household, { name: value }),
   );
 
-  async function save(field: "weekStartsOn" | "timeZone", update: HouseholdSettingsUpdate) {
+  async function save(field: SettingsField, update: HouseholdSettingsUpdate) {
     setErrors((current) => ({ ...current, [field]: undefined }));
     try {
       await updateHouseholdSettings(household, update);
@@ -92,6 +101,22 @@ export function HouseholdSettings({
           selectClassName="lg:h-10.5"
         />
       </div>
+      {members.length >= 2 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-body-sm font-semibold text-ink">{recurrenceCopy.orderLabel}</span>
+          <span className="text-[13px] leading-[18px] text-ink-muted">
+            {recurrenceCopy.orderHelper}
+          </span>
+          <RotationPicker
+            order={order}
+            onChange={(rotationOrder) => void save("rotationOrder", { rotationOrder })}
+            members={members}
+            disabled={disabled}
+            aria-label={recurrenceCopy.orderLabel}
+          />
+          {errors.rotationOrder && <FieldError>{errors.rotationOrder}</FieldError>}
+        </div>
+      )}
     </HouseholdSection>
   );
 }

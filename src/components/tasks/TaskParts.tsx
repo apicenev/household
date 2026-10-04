@@ -1,4 +1,10 @@
-import { CalendarIcon, ExclamationCircleIcon, MinusCircleIcon } from "@heroicons/react/16/solid";
+import {
+  ArrowPathIcon,
+  ArrowsRightLeftIcon,
+  CalendarIcon,
+  ExclamationCircleIcon,
+  MinusCircleIcon,
+} from "@heroicons/react/16/solid";
 import { dueGroup } from "../../domain/tasks";
 import { taskCopy, terms } from "../../lib/copy";
 import { cx } from "../../lib/cx";
@@ -79,5 +85,36 @@ export function TaskAssigneeAvatar({
         name={member.displayName}
       />
     </span>
+  );
+}
+
+/** What a row shows of a recurring task (Phase 4 B10): short rule and rotation order. */
+export interface TaskRepeatInfo {
+  /** «Wöchentlich», «Alle 4 Tage» */
+  rule: string;
+  /** «Nevio → Anna» */
+  rotation?: string;
+}
+
+/**
+ * «↻ Wöchentlich» and «⇄ Nevio → Anna» in a row's meta line (`Tasks.dc.html`: 14 px icons,
+ * 3 px gap). Two siblings, so they wrap with the due label.
+ */
+export function TaskRepeatMeta({ repeat }: { repeat: TaskRepeatInfo }) {
+  return (
+    <>
+      <span className="inline-flex items-center gap-0.75">
+        <ArrowPathIcon aria-hidden="true" className="size-3.5 shrink-0" />
+        <span className="sr-only">{terms.repeat}: </span>
+        {repeat.rule}
+      </span>
+      {repeat.rotation && (
+        <span className="inline-flex items-center gap-0.75">
+          <ArrowsRightLeftIcon aria-hidden="true" className="size-3.5 shrink-0" />
+          <span className="sr-only">{taskCopy.rotationSr}</span>
+          {repeat.rotation}
+        </span>
+      )}
+    </>
   );
 }

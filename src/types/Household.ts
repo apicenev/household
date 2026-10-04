@@ -17,13 +17,18 @@ export interface Household {
   inviteCode: string;
   /** Server time the code was created; it expires 7 days later (HH-03). */
   inviteCreatedAt: Date;
+  /**
+   * Default order of new rotations (HH-07, Phase 4 B11); may hold former members, who are
+   * skipped. Missing until the owner sets it.
+   */
+  rotationOrder?: string[];
   createdAt: Date;
   updatedAt: Date;
 }
 
 /** Settings only the owner may change (HH-07). */
 export type HouseholdSettingsUpdate = Partial<
-  Pick<Household, "name" | "weekStartsOn" | "timeZone">
+  Pick<Household, "name" | "weekStartsOn" | "timeZone" | "rotationOrder">
 >;
 
 export type MemberRole = "owner" | "member";

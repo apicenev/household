@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { RecurrenceContext } from "../domain/tasks";
 import type { Household, Member, NewTaskInput, Task, TaskChanges, UserProfile } from "../types";
 
 /**
@@ -223,7 +224,11 @@ export const taskServiceMock = {
         nameOf: (uid: string) => string | undefined,
       ) => Promise<void>
     >(),
-  completeTask: vi.fn<(hid: string, task: Task, actorId: string) => Promise<void>>(),
-  reopenTask: vi.fn<(hid: string, task: Task) => Promise<void>>(),
+  completeTask:
+    vi.fn<(hid: string, task: Task, actorId: string, ctx?: RecurrenceContext) => Promise<void>>(),
+  reopenTask: vi.fn<(hid: string, task: Task, tasks?: readonly Task[]) => Promise<void>>(),
   deleteTask: vi.fn<(hid: string, task: Task) => Promise<void>>(),
+  deleteOccurrence:
+    vi.fn<(hid: string, task: Task, actorId: string, ctx: RecurrenceContext) => Promise<void>>(),
+  deleteSeries: vi.fn<(hid: string, task: Task) => Promise<void>>(),
 };

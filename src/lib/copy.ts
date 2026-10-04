@@ -162,8 +162,10 @@ export const taskCopy = {
   checkLabel: (title: string) => `${terms.markDone}: ${title}`,
   /** «Bad putzen wieder öffnen» */
   reopenLabel: (title: string) => `${title} wieder öffnen`,
-  /** «„Bad putzen“ erledigt» toast (B6). */
+  /** «Bad putzen» erledigt toast (B6). */
   completedToast: (title: string) => `«${title}» erledigt`,
+  /** Recurring: «Bad putzen» erledigt · als Nächstes ist Anna dran (Phase 4 D29). */
+  completedToastWithNote: (title: string, note: string) => `«${title}» erledigt · ${note}`,
   /** Schnellerfassung status line (B13). */
   addedStatus: (title: string) => `«${title}» zu den Aufgaben hinzugefügt`,
   /** Delete confirmation title. */
@@ -173,7 +175,59 @@ export const taskCopy = {
     names.length < 2
       ? "Die Aufgabe wird gelöscht."
       : `Die Aufgabe verschwindet für ${new Intl.ListFormat("de-CH", { type: "conjunction" }).format(names)}.`,
+  /** Detail panel rotation block heading and screen-reader prefix in rows (Phase 4). */
+  rotation: "Abwechseln",
+  rotationSr: "Abwechselnd: ",
+  /** Delete dialog of a recurring task (RTK-08, Phase 4 B8). */
+  series: {
+    /** «Diese Aufgabe wiederholt sich jeden Samstag. Was möchtest du löschen?» */
+    text: (rule: string) => `Diese Aufgabe wiederholt sich ${rule}. Was möchtest du löschen?`,
+    choiceLabel: "Was möchtest du löschen?",
+    one: "Nur diese",
+    /** «Nur Sa., 3. Okt. Die nächste bleibt.» */
+    oneHint: (date: string) => `Nur ${date.endsWith(".") ? date : `${date}.`} Die nächste bleibt.`,
+    all: "Ganze Serie",
+    /** «Alle künftigen Samstage.» for a weekly task on one day, otherwise generic. */
+    allHint: (weekdayPlural?: string) =>
+      weekdayPlural ? `Alle künftigen ${weekdayPlural}.` : "Alle künftigen Wiederholungen.",
+    oneCta: "Nur diese löschen",
+    allCta: "Ganze Serie löschen",
+  },
   /** Desktop summary «5 offen · 1 überfällig · 2 heute fällig» (B4). */
   summary: (open: number, overdue: number, today: number) =>
     `${open} offen · ${overdue} überfällig · ${today} heute fällig`,
+} as const;
+
+/** RecurrencePicker and RotationPicker (Phase 4, `RecurrencePicker.dc.html`, `Sheets`). */
+export const recurrenceCopy = {
+  label: terms.repeat,
+  /** The chips tasks offer (B2); «Benutzerdefiniert» stays hidden. */
+  freqs: {
+    none: "Nie",
+    daily: "Täglich",
+    weekly: "Wöchentlich",
+    nweeks: "Alle N Wochen",
+    monthly: "Monatlich",
+    yearly: "Jährlich",
+    ndays: "Alle N Tage",
+  },
+  noRepeat: "Wiederholt sich nicht",
+  every: "Alle",
+  weeks: "Wochen",
+  days: "Tage",
+  less: "Weniger",
+  more: "Mehr",
+  onDays: "An diesen Tagen",
+  rotation: terms.rotate,
+  rotationHint: "Nach jedem Erledigen ist die nächste Person dran.",
+  /** «Abwechseln ist an: diesmal Nevio, danach Anna.» under «Zuständig». */
+  rotationOn: (first: string, second: string) =>
+    `Abwechseln ist an: diesmal ${first}, danach ${second}.`,
+  thisTime: "Diesmal",
+  moveUp: (name: string) => `${name} nach oben`,
+  moveDown: (name: string) => `${name} nach unten`,
+  moveForward: (name: string) => `${name} nach vorne`,
+  /** D30 on /household. */
+  orderLabel: "Reihenfolge beim Abwechseln",
+  orderHelper: "Neue abwechselnde Aufgaben starten in dieser Reihenfolge.",
 } as const;

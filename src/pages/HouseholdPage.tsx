@@ -73,7 +73,12 @@ export default function HouseholdPage() {
           />
         </div>
         <div className="flex flex-col gap-6 lg:gap-5">
-          <HouseholdSettings household={household} isOwner={isOwner} ownerName={ownerName} />
+          <HouseholdSettings
+            household={household}
+            members={members}
+            isOwner={isOwner}
+            ownerName={ownerName}
+          />
           {profile && (
             <MyProfile profile={profile} household={household} email={user?.email ?? ""} />
           )}

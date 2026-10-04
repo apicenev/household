@@ -1,6 +1,6 @@
 import { ArrowUturnLeftIcon } from "@heroicons/react/16/solid";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { actions as actionLabels, taskCopy } from "../../lib/copy";
+import { actions as actionLabels } from "../../lib/copy";
 import type { Task } from "../../types";
 import { useToast } from "../ui/toastContext";
 import type { TaskActions } from "./taskContext";
@@ -33,10 +33,12 @@ export function useCheckOff(tasks: Task[], taskActions: TaskActions) {
     const task = current.find((candidate) => candidate.id === taskId);
     // Completed or deleted by someone else meanwhile: nothing to do.
     if (!task || task.status !== "open") return;
+    // Before the write: a recurring task's note names its next occurrence (Phase 4 D29).
+    const message = write.completedMessage(task);
     write.complete(task);
     if (toastId.current) toasts.dismiss(toastId.current);
     toastId.current = toasts.show({
-      message: taskCopy.completedToast(task.title),
+      message,
       duration: COMPLETED_TOAST_MS,
       action: {
         label: actionLabels.undo,

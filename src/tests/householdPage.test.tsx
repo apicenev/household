@@ -319,6 +319,35 @@ describe("Einstellungen", () => {
     expect(
       within(settings).getByText("Nur Nevio kann die Einstellungen ändern."),
     ).toBeInTheDocument();
+    const order = within(settings).getByRole("list", { name: "Reihenfolge beim Abwechseln" });
+    for (const button of within(order).getAllByRole("button")) expect(button).toBeDisabled();
+  });
+
+  it("the owner sets the default rotation order (HH-07, D30)", async () => {
+    renderHousehold();
+    await page();
+    const settings = section("Einstellungen");
+    const order = within(settings).getByRole("list", { name: "Reihenfolge beim Abwechseln" });
+    // No order saved yet: members by join date, Nevio (owner) first.
+    expect(
+      within(order)
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(["NENevio", "ANAnna"]);
+    expect(within(order).getByRole("button", { name: "Nevio nach oben" })).toBeDisabled();
+    await userEvent.click(within(order).getByRole("button", { name: "Anna nach oben" }));
+    expect(householdServiceMock.updateHouseholdSettings).toHaveBeenCalledWith(expect.anything(), {
+      rotationOrder: ["anna", "nevio"],
+    });
+  });
+
+  it("hides the rotation order with a single member (D30)", async () => {
+    fakeStore.members = fakeStore.members.filter((member) => member.uid === "nevio");
+    renderHousehold();
+    await page();
+    expect(
+      within(section("Einstellungen")).queryByText("Reihenfolge beim Abwechseln"),
+    ).not.toBeInTheDocument();
   });
 });
 

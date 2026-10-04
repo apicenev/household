@@ -10,7 +10,7 @@ rules_version = '2';
 //   users/{uid}                        own profile only                       (Phase 1)
 //   households/{hid}                   members read, owner updates            (Phase 2)
 //   households/{hid}/members           members read, own doc only             (Phase 2)
-//   households/{hid}/tasks             members CRUD, validated                (Phase 3)
+//   households/{hid}/tasks             members CRUD, validated                (Phases 3, 4)
 //   households/{hid}/shoppingItems|itemStats|events                           (Phases 5–7)
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
@@ -176,14 +176,26 @@ service cloud.firestore {
           && getAfter(invitePath(data.inviteCode)).data.householdId == hid;
       }
 
+      // Default order of new rotations (HH-07, Phase 4 B11): members only, no duplicates.
+      function validRotationOrder(value) {
+        return value is list
+          && value.size() <= 20
+          && value.toSet().size() == value.size()
+          && value.hasOnly(resource.data.memberIds);
+      }
+
+      // rotationOrder is checked only when it changes, so an order that still holds a
+      // former member (Phase 9) doesn't block renaming the household.
       function isSettingsUpdate() {
         let data = request.resource.data;
         return resource.data.ownerId == request.auth.uid
-          && changedKeys().hasOnly(['name', 'weekStartsOn', 'timeZone', 'updatedAt'])
+          && changedKeys().hasOnly(['name', 'weekStartsOn', 'timeZone', 'rotationOrder',
+                                    'updatedAt'])
           && data.updatedAt == request.time
           && validName(data.name)
           && validWeekStart(data.weekStartsOn)
-          && validTimeZone(data.timeZone);
+          && validTimeZone(data.timeZone)
+          && (!('rotationOrder' in changedKeys()) || validRotationOrder(data.rotationOrder));
       }
 
       // New code batch: delete the old invite + create the new one + this update (HH-03).
@@ -274,6 +286,7 @@ service cloud.firestore {
 
       // tasks/{taskId} (Phase 3): every member reads and writes every task (requirements §3).
       // A write either edits fields, completes (open → done) or reopens (done → open).
+      // Phase 4: recurring tasks carry recurrence, rotation, seriesId and seriesIndex.
       match /tasks/{taskId} {
         function validTitle(value) {
           return value is string && value.size() <= 200 && value.trim().size() >= 1;
@@ -300,10 +313,82 @@ service cloud.firestore {
             || (value is string && value in get(householdPath(hid)).data.memberIds);
         }
 
+        // Recurrence rule (Phase 4 B2, B3; mirrors validateRule in src/domain/recurrence.ts).
+        // Weekdays 0 = Sunday … 6 = Saturday; monthly and yearly only with interval 1.
+        function validMonthDay(value) {
+          return value is int && value >= 1 && value <= 31;
+        }
+
+        function validWeekdays(value) {
+          return value is list
+            && value.size() >= 1 && value.size() <= 7
+            && value.hasOnly([0, 1, 2, 3, 4, 5, 6])
+            && value.toSet().size() == value.size();
+        }
+
+        function validRecurrence(rule) {
+          return rule is map
+            && rule.keys().hasAll(['freq', 'interval'])
+            && rule.interval is int && rule.interval >= 1 && rule.interval <= 52
+            && ((rule.freq == 'daily'
+                && rule.keys().hasOnly(['freq', 'interval']))
+              || (rule.freq == 'weekly'
+                && rule.keys().hasOnly(['freq', 'interval', 'byWeekday'])
+                && validWeekdays(rule.get('byWeekday', null)))
+              || (rule.freq == 'monthly'
+                && rule.keys().hasOnly(['freq', 'interval', 'byMonthDay'])
+                && rule.interval == 1
+                && validMonthDay(rule.get('byMonthDay', null)))
+              || (rule.freq == 'yearly'
+                && rule.keys().hasOnly(['freq', 'interval', 'byMonth', 'byMonthDay'])
+                && rule.interval == 1
+                && rule.get('byMonth', null) is int
+                && rule.byMonth >= 1 && rule.byMonth <= 12
+                && validMonthDay(rule.get('byMonthDay', null))));
+        }
+
+        // Rotation (RTK-05, Phase 4 B4): current members, no duplicates, and the assignee is
+        // the member at `index`.
+        function validRotation(rotation, assigneeId) {
+          return rotation is map
+            && rotation.keys().hasOnly(['memberIds', 'index'])
+            && rotation.keys().hasAll(['memberIds', 'index'])
+            && rotation.memberIds is list
+            && rotation.memberIds.size() >= 2 && rotation.memberIds.size() <= 20
+            && rotation.memberIds.toSet().size() == rotation.memberIds.size()
+            && rotation.memberIds.hasOnly(get(householdPath(hid)).data.memberIds)
+            && rotation.index is int
+            && rotation.index >= 0 && rotation.index < rotation.memberIds.size()
+            && assigneeId == rotation.memberIds[rotation.index];
+        }
+
+        // Series (Phase 4 B5): a first occurrence has any new seriesId (a fresh random id per
+        // series); a generated one has the id «{seriesId}-{seriesIndex}». A set over an
+        // existing generated occurrence counts as an update and fails isEdit (createdAt
+        // changes), so a second «Nur diese» or completion can't create it twice.
+        function validSeries(data) {
+          return data.seriesId is string
+            && data.seriesId.size() >= 1 && data.seriesId.size() <= 60
+            && data.seriesIndex is int && data.seriesIndex >= 1
+            && (data.seriesIndex == 1
+              || taskId == data.seriesId + '-' + string(data.seriesIndex));
+        }
+
+        // The repeat fields of a task as a whole: a rule needs a due date (RTK-02) and a
+        // series; a rotation needs a rule and matches the assignee; no series without a rule
+        // on a new task.
+        function validRepeatState(data) {
+          return (!('recurrence' in data) || (data.dueDate != null && 'seriesId' in data))
+            && (!('rotation' in data)
+              || ('recurrence' in data
+                && data.rotation.memberIds[data.rotation.index] == data.assigneeId));
+        }
+
         function validNewTask() {
           let data = request.resource.data;
           return data.keys().hasOnly(['title', 'notes', 'assigneeId', 'dueDate', 'priority',
-                                      'status', 'createdBy', 'createdAt', 'updatedAt'])
+                                      'status', 'seriesId', 'seriesIndex', 'recurrence',
+                                      'rotation', 'createdBy', 'createdAt', 'updatedAt'])
             && data.keys().hasAll(['title', 'assigneeId', 'dueDate', 'priority', 'status',
                                    'createdBy', 'createdAt', 'updatedAt'])
             && validTitle(data.title)
@@ -311,25 +396,45 @@ service cloud.firestore {
             && validAssignee(data.assigneeId)
             && validDueDate(data.dueDate)
             && validPriority(data.priority)
+            && (('recurrence' in data && validRecurrence(data.recurrence) && validSeries(data))
+              || (!('recurrence' in data) && !('seriesId' in data) && !('seriesIndex' in data)))
+            && (!('rotation' in data) || validRotation(data.rotation, data.assigneeId))
+            && validRepeatState(data)
             && data.status == 'open'
             && data.createdBy == request.auth.uid
             && data.createdAt == request.time
             && data.updatedAt == request.time;
         }
 
-        // Edit: only the editable fields change; the assignee is checked only when it
-        // changes, so a task of someone who left (Phase 9) stays editable.
+        // Edit: only the editable fields change; the assignee and the rotation are checked
+        // only when they change, so a task of someone who left (Phase 9) stays editable. A
+        // task that gets a rule starts a new series (seriesIndex 1, a seriesId it didn't
+        // have, B5).
         function isEdit() {
           let data = request.resource.data;
           let changed = changedKeys();
           return changed.hasOnly(['title', 'notes', 'assigneeId', 'dueDate', 'priority',
+                                  'recurrence', 'rotation', 'seriesId', 'seriesIndex',
                                   'updatedAt'])
             && data.updatedAt == request.time
             && (!('title' in changed) || validTitle(data.title))
             && (!('notes' in changed) || !('notes' in data) || validNotes(data.notes))
             && (!('assigneeId' in changed) || validAssignee(data.assigneeId))
             && (!('dueDate' in changed) || validDueDate(data.dueDate))
-            && (!('priority' in changed) || validPriority(data.priority));
+            && (!('priority' in changed) || validPriority(data.priority))
+            && (!('recurrence' in changed) || !('recurrence' in data)
+              || validRecurrence(data.recurrence))
+            && (!('rotation' in changed) || !('rotation' in data)
+              || validRotation(data.rotation, data.assigneeId))
+            && (!changed.hasAny(['seriesId', 'seriesIndex'])
+              || (!('recurrence' in resource.data)
+                && 'recurrence' in data
+                && validSeries(data)
+                && data.seriesIndex == 1
+                && data.seriesId != resource.data.get('seriesId', '')))
+            && ('recurrence' in resource.data || !('recurrence' in data)
+              || 'seriesId' in changed)
+            && validRepeatState(data);
         }
 
         function isComplete() {
@@ -342,13 +447,20 @@ service cloud.firestore {
             && data.updatedAt == request.time;
         }
 
+        // Reopen; a completed occurrence may drop its rule and rotation in the same write
+        // (reopened as a normal task, Phase 4 B9), but never gain one.
         function isReopen() {
           let data = request.resource.data;
+          let changed = changedKeys();
           return resource.data.status == 'done'
             && data.status == 'open'
-            && changedKeys().hasOnly(['status', 'completedAt', 'completedBy', 'updatedAt'])
+            && changed.hasOnly(['status', 'completedAt', 'completedBy', 'recurrence',
+                                'rotation', 'updatedAt'])
             && !('completedAt' in data)
             && !('completedBy' in data)
+            && (!('recurrence' in changed) || !('recurrence' in data))
+            && (!('rotation' in changed) || !('rotation' in data))
+            && validRepeatState(data)
             && data.updatedAt == request.time;
         }
 

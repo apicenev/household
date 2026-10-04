@@ -1,16 +1,20 @@
 import { TrashIcon } from "@heroicons/react/20/solid";
 import { useCallback, useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import { changedTaskFields, normalizeTaskInput, validateTaskTitle } from "../../domain/tasks";
+import { changedTaskFields, isRecurring, validateTaskTitle } from "../../domain/tasks";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
+import { useToday } from "../../hooks/useToday";
 import { actions as actionLabels, taskCopy } from "../../lib/copy";
+import { formatDate, fromDateKey } from "../../lib/format";
 import { useLoadedHousehold } from "../../lib/household/useHousehold";
+import { describeRuleInSentence, weekdayPlural } from "../../lib/recurrenceFormat";
 import type { Task } from "../../types";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Sheet } from "../ui/Sheet";
 import { useToast } from "../ui/toastContext";
+import { SeriesDeleteChoice, type SeriesChoice } from "./SeriesDeleteChoice";
 import { TaskForm } from "./TaskForm";
-import { initialTaskFormValues, type TaskFormValues } from "./taskFormValues";
+import { initialTaskFormValues, taskInputFromValues, type TaskFormValues } from "./taskFormValues";
 import {
   TaskContext,
   useTasks,
@@ -37,7 +41,8 @@ export function TaskProvider({ children }: { children: ReactNode }) {
   // Bumped on every open, so the form starts from fresh values.
   const [sheetKey, setSheetKey] = useState(0);
   const [deleting, setDeleting] = useState<DeleteState | null>(null);
-  const { members } = useLoadedHousehold();
+  const [seriesChoice, setSeriesChoice] = useState<SeriesChoice>("one");
+  const { household, members } = useLoadedHousehold();
 
   const openNewTask = useCallback((options: OpenNewTaskOptions = {}) => {
     setSheet({ mode: "new", options });
@@ -53,7 +58,11 @@ export function TaskProvider({ children }: { children: ReactNode }) {
 
   const confirmDelete = useCallback((task: Task, onDeleted?: () => void) => {
     setDeleting({ task, onDeleted });
+    setSeriesChoice("one");
   }, []);
+
+  // A recurring task asks «Nur diese / Ganze Serie» (RTK-08, Phase 4 B8).
+  const recurring = deleting && isRecurring(deleting.task) ? deleting.task : null;
 
   const value = useMemo<TaskContextValue>(
     () => ({ actions, openNewTask, openEditTask, confirmDelete }),
@@ -76,20 +85,45 @@ export function TaskProvider({ children }: { children: ReactNode }) {
           if (!deleting) return;
           // Close the sheet first, so its «deleted elsewhere» check doesn't fire (D20).
           setSheet(null);
-          actions.remove(deleting.task);
+          if (!recurring) actions.remove(deleting.task);
+          else if (seriesChoice === "one") actions.removeOccurrence(recurring);
+          else actions.removeSeries(recurring);
           deleting.onDeleted?.();
           setDeleting(null);
         }}
         title={deleting ? taskCopy.deleteTitle(deleting.task.title) : ""}
-        text={taskCopy.deleteText(members.map((member) => member.displayName))}
-        confirmLabel={actionLabels.delete}
-      />
+        text={
+          recurring
+            ? taskCopy.series.text(
+                describeRuleInSentence(recurring.recurrence, household.weekStartsOn),
+              )
+            : taskCopy.deleteText(members.map((member) => member.displayName))
+        }
+        confirmLabel={
+          !recurring
+            ? actionLabels.delete
+            : seriesChoice === "one"
+              ? taskCopy.series.oneCta
+              : taskCopy.series.allCta
+        }
+      >
+        {recurring && (
+          <SeriesDeleteChoice
+            value={seriesChoice}
+            onChange={setSeriesChoice}
+            oneHint={taskCopy.series.oneHint(
+              formatDate(fromDateKey(recurring.dueDate), household.timeZone),
+            )}
+            allHint={taskCopy.series.allHint(weekdayPlural(recurring.recurrence))}
+          />
+        )}
+      </ConfirmDialog>
     </TaskContext.Provider>
   );
 }
 
 /**
- * The sheet (phones) / dialog (desktop, 560 px until Phase 4 adds the right column, D16).
+ * The sheet (phones) / the two-column 840 px dialog (desktop, Phase 4; ends D16).
  * Closes as soon as the user saves (B8); closes with a toast when the task is deleted or
  * completed by someone else meanwhile (D20, D25).
  */
@@ -106,13 +140,17 @@ function TaskSheet({
   const { actions } = useTasks();
   const toast = useToast();
   const desktop = useIsDesktop();
+  const today = useToday(household.timeZone);
   const formId = useId();
 
   const editId = state?.mode === "edit" ? state.taskId : undefined;
   const task = editId ? tasks.find((candidate) => candidate.id === editId) : undefined;
   const prefill = state?.mode === "new" ? state.options.prefill : undefined;
+  const focusRepeat = state?.mode === "new" && state.options.focusRepeat === true;
 
-  const [values, setValues] = useState<TaskFormValues>(() => initialTaskFormValues(task, prefill));
+  const [values, setValues] = useState<TaskFormValues>(() =>
+    initialTaskFormValues(task, prefill, members),
+  );
   const [titleError, setTitleError] = useState<string | undefined>();
   // The task as it was when the sheet opened: the base for «only changed fields» (B8).
   const [original] = useState(task);
@@ -139,13 +177,7 @@ function TaskSheet({
       setTitleError(taskCopy.titleEmpty);
       return;
     }
-    const input = normalizeTaskInput({
-      title: title.title,
-      notes: values.notes,
-      assigneeId: values.assigneeId,
-      dueDate: values.dueDate || null,
-      priority: values.priority,
-    });
+    const input = taskInputFromValues(values, title.title, original);
     if (state?.mode === "new") {
       const id = actions.create(input);
       state.options.onCreated?.(id);
@@ -163,7 +195,8 @@ function TaskSheet({
       open={state !== null && !vanished}
       onClose={onClose}
       title={editing ? taskCopy.editTask : taskCopy.newTask}
-      size="md"
+      size="lg"
+      bodyClassName="lg:p-0"
       footer={
         desktop ? (
           <>
@@ -198,8 +231,12 @@ function TaskSheet({
         onChange={change}
         titleError={titleError}
         autoFocusTitle={!editing}
+        autoFocusRepeat={focusRepeat}
         members={members}
         timeZone={household.timeZone}
+        today={today}
+        weekStartsOn={household.weekStartsOn}
+        rotationOrder={household.rotationOrder}
         desktop={desktop}
         onSubmit={submit}
         onDelete={editing && task ? () => onDelete(task) : undefined}
