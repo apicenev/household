@@ -7,9 +7,10 @@ import {
   getDocs,
   setDoc,
   updateDoc,
+  waitForPendingWrites,
   type Firestore,
 } from "firebase/firestore";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CalendarEvent,
   Household,
@@ -73,10 +74,13 @@ const { allDayToStored } = await import("../../domain/eventTime");
 const { normalizeParticipants } = await import("../../domain/calendar");
 
 let env: RulesTestEnvironment;
+/** Every client a test signed in with, so their writes can settle before the next test. */
+const clients = new Set<Firestore>();
 
 function signInAs(user: TestUser): Firestore {
   const db = dbAs(env, user);
   current.db = db;
+  clients.add(db);
   return db;
 }
 
@@ -115,6 +119,13 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await env.cleanup();
+});
+
+// Fire-and-forget writes (e.g. uncheckItem's stats −1) may still be in flight when a test
+// ends; clearFirestore then times out on their transaction lock. Rejected writes settle too.
+afterEach(async () => {
+  await Promise.all([...clients].map((db) => waitForPendingWrites(db)));
+  clients.clear();
 });
 
 beforeEach(async () => {
