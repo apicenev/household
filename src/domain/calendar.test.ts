@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import type { CalendarEvent, EventCategory, EventOccurrence, Member } from "../types";
+import { describe, expect, it, vi } from "vitest";
+import { formatTime } from "../lib/format";
+import type {
+  CalendarEvent,
+  EventCategory,
+  EventOccurrence,
+  Member,
+  RecurrenceRule,
+} from "../types";
 import {
   addMonths,
   allDayLength,
@@ -7,20 +14,29 @@ import {
   compareOccurrences,
   dayDots,
   dayTime,
+  duringTrip,
   eventsOnDay,
+  eventStartKey,
   isMultiDayAllDay,
   monthGrid,
+  nextOccurrences,
   normalizeParticipants,
   occurrenceDays,
+  occurrenceKey,
   occurrencesInRange,
+  occurrenceTimes,
   parseDayParam,
   parseMonthParam,
   parseViewParam,
+  resolveOccurrenceParam,
+  seriesBounds,
+  singleOccurrence,
   spanInfo,
   upcoming,
   visibleParticipants,
 } from "./calendar";
-import { allDayToStored, zonedToInstant } from "./eventTime";
+import { allDayKeys, allDayToStored, instantToZoned, zonedToInstant } from "./eventTime";
+import { MAX_OCCURRENCES } from "./recurrence";
 
 const ZURICH = "Europe/Zurich";
 
@@ -64,7 +80,7 @@ function allDay(first: string, last: string, overrides: Partial<CalendarEvent> =
 }
 
 function occ(e: CalendarEvent): EventOccurrence {
-  return { key: e.id, event: e, start: e.start, end: e.end };
+  return singleOccurrence(e, ZURICH);
 }
 
 function member(uid: string): Member {
@@ -177,20 +193,22 @@ describe("occurrencesInRange (B11, key range)", () => {
 
   it("includes all-day events touching the first or last key", () => {
     const keys = (first: string, last: string) =>
-      occurrencesInRange([trip], first, last, ZURICH).map((o) => o.key);
+      occurrencesInRange([trip], first, last, ZURICH, 1).map((o) => o.key);
     expect(keys("2026-11-02", "2026-11-30")).toEqual([trip.id]);
     expect(keys("2026-10-01", "2026-10-30")).toEqual([trip.id]);
     expect(keys("2026-11-03", "2026-11-30")).toEqual([]);
   });
 
   it("leaves out a timed event that ends at the range start", () => {
-    expect(occurrencesInRange([endsAtRangeStart], "2026-11-01", "2026-11-30", ZURICH)).toEqual([]);
+    expect(occurrencesInRange([endsAtRangeStart], "2026-11-01", "2026-11-30", ZURICH, 1)).toEqual(
+      [],
+    );
   });
 
   it("returns one occurrence per event, keyed by its id", () => {
-    const result = occurrencesInRange([dinner], "2026-10-01", "2026-10-31", ZURICH);
+    const result = occurrencesInRange([dinner], "2026-10-01", "2026-10-31", ZURICH, 1);
     expect(result).toEqual([
-      { key: dinner.id, event: dinner, start: dinner.start, end: dinner.end },
+      { key: dinner.id, event: dinner, date: "2026-10-02", start: dinner.start, end: dinner.end },
     ]);
   });
 });
@@ -380,5 +398,225 @@ describe("participants (B5, D58)", () => {
     expect(normalizeParticipants(["nevio", "anna"], members)).toBe("household");
     expect(normalizeParticipants(["gone"], members)).toBe("household");
     expect(normalizeParticipants("household", members)).toBe("household");
+  });
+});
+
+// Phase 7: recurring events (B3–B9, D64, D65).
+const everyOtherSat: RecurrenceRule = { freq: "weekly", interval: 2, byWeekday: [6] };
+const weeklyOn = (day: number): RecurrenceRule => ({
+  freq: "weekly",
+  interval: 1,
+  byWeekday: [day],
+});
+const local = (o: EventOccurrence, tz = ZURICH) =>
+  `${instantToZoned(o.start, tz).dateKey} ${formatTime(o.start, tz)}–${formatTime(o.end, tz)} ${instantToZoned(o.end, tz).dateKey}`;
+
+describe("occurrencesInRange: series (REV-03, B4, B6)", () => {
+  it("acceptance criterion: «Grossputz» every 2 weeks on Sat from 3 Oct → 3, 17, 31 Oct", () => {
+    const cleaning = timed("2026-10-03", "10:00", "12:00", { recurrence: everyOtherSat });
+    const result = occurrencesInRange([cleaning], "2026-09-28", "2026-11-01", ZURICH, 1);
+    expect(result.map((o) => o.key)).toEqual([
+      occurrenceKey(cleaning.id, "2026-10-03"),
+      occurrenceKey(cleaning.id, "2026-10-17"),
+      occurrenceKey(cleaning.id, "2026-10-31"),
+    ]);
+    expect(result.map((o) => o.date)).toEqual(["2026-10-03", "2026-10-17", "2026-10-31"]);
+    // After the autumn change (25 Oct) still 10:00–12:00 local, i.e. one hour later in UTC.
+    expect(result.map((o) => local(o))).toEqual([
+      "2026-10-03 10:00–12:00 2026-10-03",
+      "2026-10-17 10:00–12:00 2026-10-17",
+      "2026-10-31 10:00–12:00 2026-10-31",
+    ]);
+    expect(result[0].start.toISOString()).toBe("2026-10-03T08:00:00.000Z");
+    expect(result[2].start.toISOString()).toBe("2026-10-31T09:00:00.000Z");
+    expect(result[0].start).toBe(cleaning.start);
+  });
+
+  it("rebuilds the end from its clock time on DST days (B4)", () => {
+    // Autumn 2026: 01:00–03:00 on Sun 25 Oct is three real hours, still shown as 01:00–03:00.
+    const night = timed("2026-10-18", "01:00", "03:00", { recurrence: weeklyOn(0) });
+    const autumn = occurrenceTimes(night, "2026-10-25", ZURICH);
+    expect(formatTime(autumn.start, ZURICH)).toBe("01:00");
+    expect(formatTime(autumn.end, ZURICH)).toBe("03:00");
+    expect(autumn.end.getTime() - autumn.start.getTime()).toBe(3 * 3600_000);
+
+    // Spring 2027 (own anchor): 10:00–12:00 stays; 01:30–03:30 stays 01:30–03:30, not 04:30.
+    const morning = timed("2027-03-07", "10:00", "12:00", { recurrence: weeklyOn(0) });
+    expect(local(occurrencesInRange([morning], "2027-03-28", "2027-03-28", ZURICH, 1)[0])).toBe(
+      "2027-03-28 10:00–12:00 2027-03-28",
+    );
+    const late = timed("2027-03-07", "01:30", "03:30", { recurrence: weeklyOn(0) });
+    const spring = occurrenceTimes(late, "2027-03-28", ZURICH);
+    expect(`${formatTime(spring.start, ZURICH)}–${formatTime(spring.end, ZURICH)}`).toBe(
+      "01:30–03:30",
+    );
+    expect(spring.end.getTime() - spring.start.getTime()).toBe(3600_000);
+
+    // A start in the spring gap moves forward on that day only; an end before it is the start.
+    const gap = timed("2027-03-07", "02:30", "03:00", { recurrence: weeklyOn(0) });
+    const inGap = occurrenceTimes(gap, "2027-03-28", ZURICH);
+    expect(formatTime(inGap.start, ZURICH)).toBe("03:30");
+    expect(inGap.end).toEqual(inGap.start);
+    expect(formatTime(occurrenceTimes(gap, "2027-04-04", ZURICH).start, ZURICH)).toBe("02:30");
+  });
+
+  it("keeps the day offset of an occurrence crossing midnight", () => {
+    const games = timed("2026-10-02", "22:00", "01:00", { recurrence: weeklyOn(5) }, "2026-10-03");
+    const [occurrence] = occurrencesInRange([games], "2026-10-09", "2026-10-09", ZURICH, 1);
+    expect(local(occurrence)).toBe("2026-10-09 22:00–01:00 2026-10-10");
+    // The occurrence of the 9th reaches the 10th, so a range of only the 10th has it too.
+    expect(
+      occurrencesInRange([games], "2026-10-10", "2026-10-10", ZURICH, 1).map((o) => o.date),
+    ).toEqual(["2026-10-09"]);
+  });
+
+  it("includes multi-day occurrences that start before the range (B7)", () => {
+    const weekend = allDay("2026-10-02", "2026-10-04", { recurrence: weeklyOn(5) });
+    const result = occurrencesInRange([weekend], "2026-10-11", "2026-10-31", ZURICH, 1);
+    expect(result.map((o) => o.date)).toEqual([
+      "2026-10-09",
+      "2026-10-16",
+      "2026-10-23",
+      "2026-10-30",
+    ]);
+    expect(allDayKeys(result[0])).toEqual({ startKey: "2026-10-09", endKey: "2026-10-11" });
+    expect(spanInfo(result[0], "2026-10-11")).toEqual({ day: 3, of: 3 });
+  });
+
+  it("keeps all-day series on their days in any zone", () => {
+    const rent: RecurrenceRule = { freq: "monthly", interval: 1, byMonthDay: 1 };
+    const event = allDay("2026-10-01", "2026-10-01", { recurrence: rent });
+    for (const zone of [ZURICH, "America/New_York", "Asia/Tokyo"]) {
+      const [november] = occurrencesInRange([event], "2026-11-01", "2026-11-30", zone, 1);
+      expect(november.date).toBe("2026-11-01");
+      expect(allDayKeys(november)).toEqual({ startKey: "2026-11-01", endKey: "2026-11-01" });
+    }
+  });
+
+  it("follows the household week start for «every N weeks»", () => {
+    // Sat + Sun every 2 weeks from Sat 3 Oct: with a Monday start Sat 3 and Sun 4 share a
+    // week; with a Sunday start Sun 4 begins the next week, which isn't on the schedule.
+    const weekend = timed("2026-10-03", "10:00", "11:00", {
+      recurrence: { freq: "weekly", interval: 2, byWeekday: [0, 6] },
+    });
+    const dates = (start: 0 | 1) =>
+      occurrencesInRange([weekend], "2026-10-01", "2026-10-12", ZURICH, start).map((o) => o.date);
+    expect(dates(1)).toEqual(["2026-10-03", "2026-10-04"]);
+    expect(dates(0)).toEqual(["2026-10-03", "2026-10-11"]);
+  });
+
+  it("caps a runaway series and warns", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const daily = timed("2026-01-01", "08:00", "08:30", {
+      recurrence: { freq: "daily", interval: 1 },
+    });
+    expect(occurrencesInRange([daily], "2026-01-01", "2028-12-31", ZURICH, 1)).toHaveLength(
+      MAX_OCCURRENCES,
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    warn.mockRestore();
+  });
+
+  it("leaves one-off events unchanged", () => {
+    const dinner = timed("2026-10-02", "19:30", "22:30");
+    expect(singleOccurrence(dinner, ZURICH)).toEqual({
+      key: dinner.id,
+      event: dinner,
+      date: "2026-10-02",
+      start: dinner.start,
+      end: dinner.end,
+    });
+    expect(seriesBounds(dinner, ZURICH, 1)).toBeNull();
+    expect(nextOccurrences(dinner, "2026-10-01", 3, ZURICH, 1)).toEqual([]);
+  });
+});
+
+describe("series details (D63, D64, D65)", () => {
+  const cleaning = timed("2026-09-19", "10:00", "12:00", { recurrence: everyOtherSat });
+
+  it("knows where a series starts and ends", () => {
+    expect(eventStartKey(cleaning, ZURICH)).toBe("2026-09-19");
+    expect(seriesBounds(cleaning, ZURICH, 1)).toEqual({ first: "2026-09-19", last: null });
+    const fourTimes = { ...cleaning, recurrence: { ...everyOtherSat, count: 4 } };
+    expect(seriesBounds(fourTimes, ZURICH, 1)).toEqual({ first: "2026-09-19", last: "2026-10-31" });
+  });
+
+  it("lists the next occurrences after the opened one (D64)", () => {
+    expect(nextOccurrences(cleaning, "2026-10-03", 3, ZURICH, 1).map((o) => o.date)).toEqual([
+      "2026-10-17",
+      "2026-10-31",
+      "2026-11-14",
+    ]);
+    const fourTimes = { ...cleaning, recurrence: { ...everyOtherSat, count: 4 } };
+    expect(nextOccurrences(fourTimes, "2026-10-03", 3, ZURICH, 1).map((o) => o.date)).toEqual([
+      "2026-10-17",
+      "2026-10-31",
+    ]);
+    expect(nextOccurrences(fourTimes, "2026-10-31", 3, ZURICH, 1)).toEqual([]);
+  });
+
+  it("marks occurrences during a shared trip (D65)", () => {
+    const trip = allDay("2026-10-14", "2026-10-21", { category: "travel" });
+    const range = occurrencesInRange([cleaning, trip], "2026-10-01", "2026-11-30", ZURICH, 1);
+    const on = (date: string, others = range) =>
+      duringTrip(
+        range.find((o) => o.date === date && o.event.id === cleaning.id)!,
+        others,
+      );
+    expect(on("2026-10-17")).toBe(true);
+    expect(on("2026-10-31")).toBe(false);
+
+    const only = (participants: string[] | "household", overrides: Partial<CalendarEvent> = {}) =>
+      occurrencesInRange(
+        [allDay("2026-10-14", "2026-10-21", { category: "travel", participants, ...overrides })],
+        "2026-10-01",
+        "2026-10-31",
+        ZURICH,
+        1,
+      );
+    const annasCleaning = singleOccurrence(
+      timed("2026-10-17", "10:00", "12:00", { participants: ["anna"] }),
+      ZURICH,
+    );
+    expect(duringTrip(annasCleaning, only(["anna", "nevio"]))).toBe(true);
+    expect(duringTrip(annasCleaning, only(["nevio"]))).toBe(false);
+    expect(duringTrip(annasCleaning, only("household"))).toBe(true);
+    expect(duringTrip(annasCleaning, only("household", { category: "home" }))).toBe(false);
+    const dayTrip = occurrencesInRange(
+      [allDay("2026-10-17", "2026-10-17", { category: "travel" })],
+      "2026-10-01",
+      "2026-10-31",
+      ZURICH,
+      1,
+    );
+    expect(duringTrip(annasCleaning, dayTrip)).toBe(false);
+  });
+});
+
+describe("resolveOccurrenceParam (B9)", () => {
+  const cleaning = timed("2026-09-19", "10:00", "12:00", { recurrence: everyOtherSat });
+  const ended = timed("2026-09-05", "10:00", "12:00", {
+    recurrence: { ...everyOtherSat, count: 2 },
+  });
+  const dinner = timed("2026-10-02", "19:30", "22:30");
+  const events = [cleaning, ended, dinner];
+  const resolve = (param: string) => resolveOccurrenceParam(param, events, "2026-09-30", ZURICH, 1);
+
+  it("opens the occurrence of a date on the schedule", () => {
+    const occurrence = resolve(occurrenceKey(cleaning.id, "2026-10-17"));
+    expect(occurrence?.key).toBe(occurrenceKey(cleaning.id, "2026-10-17"));
+    expect(local(occurrence!)).toBe("2026-10-17 10:00–12:00 2026-10-17");
+  });
+
+  it("falls back to the next occurrence from today, or the last one of an ended series", () => {
+    expect(resolve(occurrenceKey(cleaning.id, "2026-10-18"))?.date).toBe("2026-10-03");
+    expect(resolve(`${cleaning.id}@garbage`)?.date).toBe("2026-10-03");
+    expect(resolve(cleaning.id)?.date).toBe("2026-10-03");
+    expect(resolve(ended.id)?.date).toBe("2026-09-19");
+  });
+
+  it("ignores a date on one-off events and returns null for unknown ids", () => {
+    expect(resolve(`${dinner.id}@2026-10-05`)).toEqual(singleOccurrence(dinner, ZURICH));
+    expect(resolve("missing")).toBeNull();
   });
 });

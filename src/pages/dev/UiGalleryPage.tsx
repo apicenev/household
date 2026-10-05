@@ -48,6 +48,7 @@ import { InlineAlert } from "../../components/ui/InlineAlert";
 import { ListRow } from "../../components/ui/ListRow";
 import { PriorityMarker, type Priority } from "../../components/ui/PriorityMarker";
 import { RecurrenceBadge } from "../../components/ui/RecurrenceBadge";
+import { RecurrencePicker } from "../../components/ui/RecurrencePicker";
 import { SectionHeader } from "../../components/ui/SectionHeader";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { Select } from "../../components/ui/Select";
@@ -56,6 +57,7 @@ import { TextField } from "../../components/ui/TextField";
 import { Textarea } from "../../components/ui/Textarea";
 import { TimeField } from "../../components/ui/TimeField";
 import { Toggle } from "../../components/ui/Toggle";
+import { eventPickerFromRule, pickerFromRule } from "../../domain/recurrence";
 import { cx } from "../../lib/cx";
 
 /*
@@ -526,6 +528,39 @@ function ControlsSection() {
           ]}
         />
       </Panel>
+    </Section>
+  );
+}
+
+/** «Wiederholen» (`RecurrencePicker.dc.html`): the task chips, and the event mode (Phase 7). */
+function RecurrenceSection() {
+  const [task, setTask] = useState(() =>
+    pickerFromRule({ freq: "weekly", interval: 2, byWeekday: [6] }, "2026-10-03"),
+  );
+  const [event, setEvent] = useState(() =>
+    eventPickerFromRule(
+      { freq: "monthly", interval: 1, byWeekday: [6], bySetPos: 1, count: 10 },
+      "2026-10-03",
+    ),
+  );
+  return (
+    <Section id="recurrence" title="Wiederholen">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(320px,1fr))] gap-6">
+        <Panel className="flex flex-col gap-4">
+          <Label>Aufgaben</Label>
+          <RecurrencePicker value={task} onChange={setTask} dueDate="2026-10-03" weekStartsOn={1} />
+        </Panel>
+        <Panel className="flex flex-col gap-4">
+          <Label>Termine (Monatlich, Endet)</Label>
+          <RecurrencePicker
+            mode="event"
+            value={event}
+            onChange={setEvent}
+            dueDate="2026-10-03"
+            weekStartsOn={1}
+          />
+        </Panel>
+      </div>
     </Section>
   );
 }
@@ -1087,6 +1122,7 @@ export default function UiGalleryPage() {
       <ButtonsSection />
       <FieldsSection />
       <ControlsSection />
+      <RecurrenceSection />
       <ChipsSection />
       <RowsSection />
       <OverlaysSection />

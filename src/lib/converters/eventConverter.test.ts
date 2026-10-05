@@ -48,3 +48,22 @@ describe("eventConverter", () => {
     expect(read.hasPendingWrites).toBe(true);
   });
 });
+
+describe("eventConverter: recurrence (Phase 7)", () => {
+  it("round-trips a rule and leaves it out for one-off events", () => {
+    const series: CalendarEvent = {
+      ...event,
+      recurrence: { freq: "monthly", interval: 1, byWeekday: [6], bySetPos: 1, count: 5 },
+    };
+    const stored = eventConverter.toFirestore(series) as Record<string, unknown>;
+    expect(stored.recurrence).toEqual(series.recurrence);
+    expect(eventConverter.fromFirestore(snapshot("e1", stored))).toEqual(series);
+
+    const oneOff = eventConverter.toFirestore(event) as Record<string, unknown>;
+    expect(oneOff).not.toHaveProperty("recurrence");
+    expect(eventConverter.fromFirestore(snapshot("e1", oneOff)).recurrence).toBeUndefined();
+    expect(
+      eventConverter.fromFirestore(snapshot("e1", { ...oneOff, recurrence: null })).recurrence,
+    ).toBeUndefined();
+  });
+});

@@ -287,6 +287,15 @@ export const recurrenceCopy = {
   less: "Weniger",
   more: "Mehr",
   onDays: "An diesen Tagen",
+  /** Events only (Phase 7): monthly segment (D60) and «Endet» (REV-02, D59). */
+  monthlyDay: (day: number) => `Am ${day}.`,
+  monthlyWeekday: (position: string, weekday: string) => `Am ${position} ${weekday}`,
+  monthlyLabel: "Monatlich am",
+  ends: "Endet",
+  endOptions: { never: "Nie", date: "Am Datum", after: "Nach N Mal" },
+  endsOn: "Endet am",
+  after: "Nach",
+  times: "Mal",
   rotation: terms.rotate,
   rotationHint: "Nach jedem Erledigen ist die nächste Person dran.",
   /** «Abwechseln ist an: diesmal Nevio, danach Anna.» under «Zuständig». */
@@ -376,4 +385,16 @@ export const calendarCopy = {
   deletedToast: (title: string) => `«${title}» gelöscht`,
   /** Schnellerfassung status line (D56). */
   addedStatus: (title: string) => `«${title}» zum Kalender hinzugefügt`,
+  /** Phase 7: Termin-Detail «Nächste Termine» (D64) and its badge (D65). */
+  nextDates: "Nächste Termine",
+  duringTrip: "Während Ferien",
+  /** D61: the sheet of a series. */
+  seriesHint: (since: string) => `Änderungen gelten für alle Termine dieser Serie (seit ${since}).`,
+  /** D62: deleting a series. */
+  deleteSeriesText: (names: readonly string[]) =>
+    names.length < 2
+      ? "Alle Termine dieser Serie werden gelöscht."
+      : `Alle Termine dieser Serie verschwinden für ${listFormat(names)}.`,
+  /** D66 */
+  untilBeforeStart: "Das Enddatum darf nicht vor dem Beginn liegen.",
 } as const;

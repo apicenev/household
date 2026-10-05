@@ -5,8 +5,9 @@ import { cx } from "../../lib/cx";
 import type { EventOccurrence, Member } from "../../types";
 import { eventCategories } from "../ui/categories";
 import { CategoryLabel } from "../ui/CategoryLabel";
-import { timeColumn, timeLine, upcomingHeader, upcomingSpan } from "./calendarLabels";
+import { repeatLabel, timeColumn, timeLine, upcomingHeader, upcomingSpan } from "./calendarLabels";
 import { NothingPlanned } from "./DayPanel";
+import { RepeatLabel } from "./EventCard";
 import { ParticipantAvatars } from "./ParticipantAvatars";
 
 interface UpcomingListProps {
@@ -90,6 +91,7 @@ function UpcomingRow({
 }: UpcomingListProps & { occurrence: EventOccurrence; dayKey: string; first: boolean }) {
   const { event } = occurrence;
   const span = upcomingSpan(occurrence);
+  const repeat = repeatLabel(occurrence);
   const style = eventCategories[event.category];
   const Icon = style.icon;
   return (
@@ -111,6 +113,7 @@ function UpcomingRow({
             <span className="text-[15px] font-medium">{event.title}</span>
             {span && <span className="text-[13px] text-ink-muted">{span}</span>}
           </span>
+          {repeat && <RepeatLabel text={repeat} />}
           <CategoryLabel kind="event" category={event.category} size="sm" />
           <span className="flex w-11 shrink-0 justify-end">
             <ParticipantAvatars participants={event.participants} members={members} size={24} />
@@ -128,6 +131,11 @@ function UpcomingRow({
                 <Icon aria-hidden="true" className={cx("size-3.5", style.main)} />
                 {style.label}
               </span>
+              {repeat && (
+                <span className="inline-flex items-center gap-0.75">
+                  · <RepeatLabel text={repeat} />
+                </span>
+              )}
               {span && <span>· {span}</span>}
             </span>
           </span>

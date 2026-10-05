@@ -55,3 +55,12 @@ export function endOfWeekKey(key: string, weekStartsOn: WeekStart): string {
 export function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
+
+const DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Whether `value` is a real calendar date written as «2026-10-03». */
+export function isDateKey(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE_KEY.test(value)) return false;
+  const { year, month, day } = keyParts(value);
+  return dateKey(year, month, day) === value;
+}

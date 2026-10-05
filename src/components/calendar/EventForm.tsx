@@ -5,11 +5,13 @@ import { useId, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { EVENT_DESCRIPTION_MAX, EVENT_TITLE_MAX } from "../../domain/eventTime";
 import { calendarCopy } from "../../lib/copy";
 import { cx } from "../../lib/cx";
-import type { EventCategory, Member } from "../../types";
+import type { EventCategory, Member, WeekStart } from "../../types";
 import { Avatar } from "../ui/Avatar";
 import { Button } from "../ui/Button";
 import { eventCategories } from "../ui/categories";
 import { DatePill, TimePill } from "../ui/DateTimePill";
+import { InlineAlert } from "../ui/InlineAlert";
+import { RecurrencePicker } from "../ui/RecurrencePicker";
 import { TextField } from "../ui/TextField";
 import { Textarea } from "../ui/Textarea";
 import { Toggle } from "../ui/Toggle";
@@ -34,16 +36,25 @@ const errorText: Record<EventFormError, string> = {
   endBeforeStart: calendarCopy.endBeforeStart,
   tooLong: calendarCopy.tooLong,
   notMidnight: calendarCopy.endBeforeStart,
+  untilBeforeStart: calendarCopy.untilBeforeStart,
 };
 
 interface EventFormProps {
   formId: string;
   values: EventFormValues;
   onChange: (values: EventFormValues) => void;
-  /** Errors shown so far (title after a submit, times as soon as they're wrong). */
-  errors: { title?: EventFormError; description?: EventFormError; times?: EventFormError };
+  /** Errors shown so far (title after a submit, times and «Endet am» as soon as they're wrong). */
+  errors: {
+    title?: EventFormError;
+    description?: EventFormError;
+    times?: EventFormError;
+    until?: EventFormError;
+  };
   members: readonly Member[];
   timeZone: string;
+  weekStartsOn: WeekStart;
+  /** Editing a series (Phase 7 D61): its first occurrence, «Sa., 19. Sept.», for the hint. */
+  seriesSince?: string;
   focus: EventFormFocus;
   onSubmit: () => void;
   /** Phones, edit only: «Termin löschen» at the end of the form (desktop: in the footer). */
@@ -53,8 +64,9 @@ interface EventFormProps {
 /**
  * The fields of «Neuer Termin» / «Termin bearbeiten» (`Sheets.dc.html` → Termin-Sheet, D46,
  * D48, D58): Titel; «Ganztägig» with the «Beginn» / «Ende» rows; «Für»; «Kategorie»;
- * «Beschreibung». «Wiederholen» arrives in Phase 7. The submit buttons live in the sheet
- * footer (`form` attribute).
+ * «Beschreibung»; «Wiederholen» with «Endet» (Phase 7, anchored at the start day). Editing a
+ * series starts with the D61 hint. The submit buttons live in the sheet footer (`form`
+ * attribute).
  */
 export function EventForm({
   formId,
@@ -63,6 +75,8 @@ export function EventForm({
   errors,
   members,
   timeZone,
+  weekStartsOn,
+  seriesSince,
   focus,
   onSubmit,
   onDelete,
@@ -97,6 +111,7 @@ export function EventForm({
       }}
       className="flex flex-col gap-4.5"
     >
+      {seriesSince && <InlineAlert tone="info">{calendarCopy.seriesHint(seriesSince)}</InlineAlert>}
       <TextField
         label={calendarCopy.title}
         value={values.title}
@@ -229,6 +244,15 @@ export function EventForm({
         showCount={false}
         rows={2}
         error={errors.description ? errorText[errors.description] : undefined}
+      />
+
+      <RecurrencePicker
+        mode="event"
+        value={values.repeat}
+        onChange={(repeat) => onChange({ ...values, repeat })}
+        dueDate={values.startKey}
+        weekStartsOn={weekStartsOn}
+        untilError={errors.until ? errorText[errors.until] : undefined}
       />
 
       {onDelete && (

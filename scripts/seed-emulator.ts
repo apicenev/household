@@ -237,6 +237,11 @@ async function seedTasks(db: Firestore, hid: string, ownerUid: string): Promise<
 }
 
 /** First date from today (inclusive) on the given weekday (0 = Sunday … 6 = Saturday). */
+/** The first `weekday` (0 = Sunday) on or after `key`. */
+function weekdayFrom(key: string, weekday: number): string {
+  return addDaysToKey(key, (weekday - weekdayOfKey(key) + 7) % 7);
+}
+
 function nextWeekday(weekday: number): string {
   for (let days = 0; ; days++) {
     const key = dayFromToday(days);
@@ -407,7 +412,12 @@ async function seedShopping(
  * The example events of `Calendar.dc.html` (Phase 6 §6.7), relative to today in Zurich, with
  * fixed ids, so reruns add only the missing ones: all-day, timed, a multi-day «Ferien» across
  * a week boundary, one event for Anna only (Nevio while she isn't a member) and a late event
- * that crosses midnight (D55). «Grossputz» and «Altpapiersammlung» are one-off until Phase 7.
+ * that crosses midnight (D55). Recurring events (Phase 7 §7.7): «Grossputz» every 2 weeks with
+ * one occurrence inside «Ferien» (D65), «Altpapiersammlung» every 2 weeks, «Miete bezahlen»
+ * monthly, «Geburtstag Nevio» yearly, a course with «Nach 8 Mal» and one that ended («Endete
+ * am», D63). The series have their own ids, so an emulator seeded before Phase 7 keeps its
+ * one-off «Grossputz» / «Altpapiersammlung» (old ids) next to them; reseed a fresh emulator to
+ * avoid the duplicates.
  */
 async function seedEvents(
   db: Firestore,
@@ -427,6 +437,10 @@ async function seedEvents(
     const { start, end } = allDayToStored(first, last);
     return { allDay: true, start: Timestamp.fromDate(start), end: Timestamp.fromDate(end) };
   };
+  // A yearly series from last year with its next occurrence in about 40 days (not 29 Feb).
+  let birthday = addDaysToKey(today, 40);
+  if (birthday.endsWith("-02-29")) birthday = addDaysToKey(birthday, 1);
+  birthday = `${Number(birthday.slice(0, 4)) - 1}${birthday.slice(4)}`;
   const events = [
     {
       id: "seed-furniture",
@@ -458,18 +472,61 @@ async function seedEvents(
       ...allDay(addDaysToKey(today, 14), addDaysToKey(today, 21)),
     },
     {
-      id: "seed-cleaning",
+      // Anchored at the first Saturday of «Ferien» minus 4 weeks, so every seed day has an
+      // occurrence inside the trip (D65) and a start in the past.
+      id: "seed-cleaning-series",
       title: "Grossputz",
       description: "Küche, Bad, Böden und Fenster. Aufgeteilt nach Zimmer.",
       category: "home",
-      ...timed(nextWeekday(6), "10:00", "12:00"),
+      ...timed(addDaysToKey(weekdayFrom(addDaysToKey(today, 14), 6), -28), "10:00", "12:00"),
+      recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
     },
     {
-      id: "seed-recycling",
+      id: "seed-recycling-series",
       title: "Altpapiersammlung",
       description: "Papier und Karton. Am Vorabend bereitstellen.",
       category: "reminder",
-      ...allDay(nextWeekday(1), nextWeekday(1)),
+      ...allDay(addDaysToKey(nextWeekday(1), -14), addDaysToKey(nextWeekday(1), -14)),
+      recurrence: { freq: "weekly", interval: 2, byWeekday: [1] },
+    },
+    {
+      id: "seed-rent-series",
+      title: "Miete bezahlen",
+      category: "reminder",
+      ...allDay(`${today.slice(0, 7)}-01`, `${today.slice(0, 7)}-01`),
+      recurrence: { freq: "monthly", interval: 1, byMonthDay: 1 },
+    },
+    {
+      id: "seed-birthday-series",
+      title: "Geburtstag Nevio",
+      category: "social",
+      ...allDay(birthday, birthday),
+      recurrence: {
+        freq: "yearly",
+        interval: 1,
+        byMonth: Number(birthday.slice(5, 7)),
+        byMonthDay: Number(birthday.slice(8, 10)),
+      },
+    },
+    {
+      id: "seed-yoga-series",
+      title: "Yoga-Kurs",
+      category: "appointment",
+      ...timed(addDaysToKey(weekdayFrom(today, 4), -21), "18:30", "19:45"),
+      participants: [annaUid ?? ownerUid],
+      recurrence: { freq: "weekly", interval: 1, byWeekday: [4], count: 8 },
+    },
+    {
+      id: "seed-swimming-series",
+      title: "Schwimmkurs",
+      category: "appointment",
+      ...timed(addDaysToKey(weekdayFrom(today, 2), -63), "17:00", "18:00"),
+      recurrence: {
+        freq: "weekly",
+        interval: 1,
+        byWeekday: [2],
+        until: addDaysToKey(weekdayFrom(today, 2), -14),
+      },
     },
     {
       id: "seed-games",

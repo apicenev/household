@@ -3,7 +3,9 @@ import type { RecurrenceRule } from "../types";
 import {
   completionNote,
   describeRule,
+  describeRuleEnd,
   describeRuleInSentence,
+  describeSeriesEnd,
   nextDuePhrase,
   rotationLabel,
   rotationPreview,
@@ -136,5 +138,61 @@ describe("series delete dialog texts (B8)", () => {
   it("doesn't double the period after an abbreviated month", () => {
     expect(taskCopy.series.oneHint("Sa., 3. Okt.")).toBe("Nur Sa., 3. Okt. Die nächste bleibt.");
     expect(taskCopy.series.oneHint("Fr., 1. Mai")).toBe("Nur Fr., 1. Mai. Die nächste bleibt.");
+  });
+});
+
+describe("event rules (Phase 7 D60, D63)", () => {
+  const firstSat: RecurrenceRule = { freq: "monthly", interval: 1, byWeekday: [6], bySetPos: 1 };
+  const everyOtherSat: RecurrenceRule = { freq: "weekly", interval: 2, byWeekday: [6] };
+
+  it("describes monthly by weekday", () => {
+    expect(describeRule(firstSat)).toBe("Monatlich am 1. Samstag");
+    expect(describeRule({ ...firstSat, bySetPos: -1 })).toBe("Monatlich am letzten Samstag");
+    expect(describeRule({ ...firstSat, byWeekday: [2], bySetPos: 2 })).toBe(
+      "Monatlich am 2. Dienstag",
+    );
+    expect(describeRule(firstSat, { short: true })).toBe("Monatlich");
+  });
+
+  it("describes the end for the picker summary", () => {
+    expect(describeRuleEnd(everyOtherSat)).toBeUndefined();
+    expect(describeRuleEnd({ ...everyOtherSat, until: "2026-12-31" })).toBe("bis 31. Dez. 2026");
+    expect(describeRuleEnd({ ...everyOtherSat, count: 10 })).toBe("10 Mal");
+  });
+
+  it("describes the series in the Termin-Detail", () => {
+    const since = { first: "2026-09-19", last: null };
+    expect(describeSeriesEnd(everyOtherSat, since, "2026-09-30")).toBe(
+      "Seit Sa., 19. Sept. · endet nie",
+    );
+    expect(
+      describeSeriesEnd(
+        { ...everyOtherSat, until: "2026-12-31" },
+        { first: "2026-09-19", last: "2026-12-26" },
+        "2026-09-30",
+      ),
+    ).toBe("Seit Sa., 19. Sept. · endet am Do., 31. Dez. 2026");
+    expect(
+      describeSeriesEnd(
+        { ...everyOtherSat, count: 10 },
+        { first: "2026-09-19", last: "2027-01-23" },
+        "2026-09-30",
+      ),
+    ).toBe("Seit Sa., 19. Sept. · endet nach 10 Terminen");
+    expect(
+      describeSeriesEnd(
+        { ...everyOtherSat, count: 2 },
+        { first: "2026-08-29", last: "2026-09-12" },
+        "2026-09-30",
+      ),
+    ).toBe("Endete am Sa., 12. Sept.");
+    // The last occurrence today isn't over yet.
+    expect(
+      describeSeriesEnd(
+        { ...everyOtherSat, count: 2 },
+        { first: "2026-09-16", last: "2026-09-30" },
+        "2026-09-30",
+      ),
+    ).toBe("Seit Mi., 16. Sept. · endet nach 2 Terminen");
   });
 });

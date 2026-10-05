@@ -157,6 +157,8 @@ function optimisticWrites() {
                 changes.description === undefined
                   ? e.description
                   : (changes.description ?? undefined),
+              recurrence:
+                changes.recurrence === undefined ? e.recurrence : (changes.recurrence ?? undefined),
             }
           : e,
       ),
@@ -745,5 +747,349 @@ describe("Schnellerfassung «Termin» (D56)", () => {
     expect(within(dialog).getByRole("textbox", { name: "Titel" })).toHaveValue("Apéro");
     expect(pill(dialog, "Beginn, Datum")).toHaveValue("2026-10-14");
     expect(screen.queryByRole("dialog", { name: "Schnellerfassung" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Kalender: recurring events (Phase 7 slice B)", () => {
+  // «Grossputz» every 2 weeks on Saturday since Sa., 19. Sept.: 3, 17 (during «Ferien») and
+  // 31 Oct (after the DST change), 14 Nov …; «Miete bezahlen» monthly on the 1st; a course
+  // that ended on Di., 15. Sept.
+  beforeEach(() => {
+    fakeStore.events = [
+      ...exampleEvents(),
+      timed("cleaning", "Grossputz", "2026-09-19", "10:00", "12:00", {
+        category: "home",
+        description: "Küche, Bad, Böden und Fenster.",
+        recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
+      }),
+      allDay("rent", "Miete bezahlen", "2026-09-01", "2026-09-01", {
+        category: "reminder",
+        recurrence: { freq: "monthly", interval: 1, byMonthDay: 1 },
+      }),
+      timed("swim", "Schwimmkurs", "2026-08-04", "17:00", "18:00", {
+        category: "appointment",
+        recurrence: { freq: "weekly", interval: 1, byWeekday: [2], until: "2026-09-15" },
+      }),
+    ];
+  });
+
+  it("shows every occurrence in the month grid (acceptance criterion 3 / 17 / 31 Oct)", async () => {
+    renderCalendar("/calendar?month=2026-10");
+    await page();
+    expect(cell("Sa., 3. Okt., 1 Termin")).toBeInTheDocument();
+    expect(cell("Sa., 10. Okt., keine Termine")).toBeInTheDocument();
+    expect(cell("Sa., 17. Okt., 2 Termine")).toBeInTheDocument();
+    expect(cell("Sa., 31. Okt., 1 Termin")).toBeInTheDocument();
+    expect(cell("Do., 1. Okt., 2 Termine")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Nächster Monat" }));
+    expect(cell("Sa., 14. Nov., 1 Termin")).toBeInTheDocument();
+    expect(cell("Sa., 28. Nov., 1 Termin")).toBeInTheDocument();
+    expect(cell("So., 1. Nov., 1 Termin")).toBeInTheDocument();
+    expect(cell("Di., 3. Nov., keine Termine")).toBeInTheDocument();
+  });
+
+  it("marks series cards and «Demnächst» rows with the rule (B8)", async () => {
+    renderCalendar("/calendar?day=2026-10-31");
+    await page();
+    const card = screen.getByRole("button", { name: /Grossputz/ });
+    expect(card).toHaveTextContent("10:0012:00");
+    expect(card).toHaveTextContent("Alle 2 Wochen");
+
+    await userEvent.click(screen.getByRole("tab", { name: "Demnächst" }));
+    const rows = screen.getAllByRole("button", { name: /Grossputz/ });
+    expect(rows).toHaveLength(5); // 3, 17, 31 Oct, 14, 28 Nov (within 60 days)
+    expect(rows[0]).toHaveTextContent("Alle 2 Wochen");
+    const rent = screen.getAllByRole("button", { name: /Miete bezahlen/ });
+    expect(rent).toHaveLength(2); // 1 Oct, 1 Nov
+    expect(rent[0]).toHaveTextContent("Monatlich");
+    expect(screen.queryByRole("button", { name: /Schwimmkurs/ })).not.toBeInTheDocument();
+  });
+
+  it("opens an occurrence's detail with the rule block and «Nächste Termine» (D63–D65)", async () => {
+    renderCalendar("/calendar?day=2026-10-03");
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: /Grossputz/ }));
+    expect(await screen.findByRole("heading", { name: "Grossputz", level: 1 })).toBeInTheDocument();
+    expect(currentUrl()).toBe("/calendar?day=2026-10-03&event=cleaning%402026-10-03");
+    expect(screen.getByText("Sa., 3. Okt. · 10:00–12:00")).toBeInTheDocument();
+    expect(screen.getByText("Alle 2 Wochen · Samstag · 10:00–12:00 · Alle")).toBeInTheDocument();
+    expect(screen.getByText("Seit Sa., 19. Sept. · endet nie")).toBeInTheDocument();
+
+    const next = screen.getAllByRole("listitem");
+    expect(screen.getByRole("heading", { name: "Nächste Termine" })).toBeInTheDocument();
+    expect(next.map((item) => item.textContent)).toEqual([
+      "Sa., 17. Okt.Während Ferien10:00–12:00",
+      "Sa., 31. Okt.10:00–12:00",
+      "Sa., 14. Nov.10:00–12:00",
+    ]);
+  });
+
+  it("opens later occurrences with their own date, also after the DST change", async () => {
+    renderCalendar("/calendar?event=cleaning%402026-10-31");
+    expect(
+      await screen.findByRole("heading", { name: "Grossputz", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Sa., 31. Okt. · 10:00–12:00")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")[0]).toHaveTextContent("Sa., 14. Nov.");
+  });
+
+  it("falls back to the next occurrence for a bare id or a date off the schedule (B9)", async () => {
+    renderCalendar("/calendar?event=cleaning%402026-10-10");
+    expect(
+      await screen.findByRole("heading", { name: "Grossputz", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Sa., 3. Okt. · 10:00–12:00")).toBeInTheDocument();
+  });
+
+  it("shows an ended series without «Nächste Termine» (D63, D64)", async () => {
+    renderCalendar("/calendar?event=swim");
+    expect(
+      await screen.findByRole("heading", { name: "Schwimmkurs", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Di., 15. Sept. · 17:00–18:00")).toBeInTheDocument();
+    expect(screen.getByText("Endete am Di., 15. Sept.")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Nächste Termine" })).not.toBeInTheDocument();
+  });
+
+  it("an all-day series shows «Ganztägig» in its rule", async () => {
+    renderCalendar("/calendar?event=rent");
+    expect(
+      await screen.findByRole("heading", { name: "Miete bezahlen", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Do., 1. Okt. · Ganztägig")).toBeInTheDocument();
+    expect(screen.getByText("Monatlich am 1. · Ganztägig · Alle")).toBeInTheDocument();
+    expect(screen.getByText("Seit Di., 1. Sept. · endet nie")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "So., 1. Nov.Ganztägig",
+      "Di., 1. Dez.Ganztägig",
+      "Fr., 1. Jan.Ganztägig",
+    ]);
+  });
+
+  it("closes with a toast when the series is deleted elsewhere (D52)", async () => {
+    renderCalendar("/calendar?event=cleaning%402026-10-17");
+    expect(
+      await screen.findByRole("heading", { name: "Grossputz", level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    act(() => fakeStore.setEvents(fakeStore.events.filter((e) => e.id !== "cleaning")));
+    expect(await screen.findByText("Dieser Termin wurde gelöscht.")).toBeInTheDocument();
+    await waitFor(() => expect(currentUrl()).toBe("/calendar"));
+  });
+
+  describe("desktop", () => {
+    beforeEach(() => mockDesktop(true));
+
+    it("turns a bare series id into its next occurrence's day with the card open (B9)", async () => {
+      renderCalendar("/calendar?event=cleaning");
+      await page();
+      await waitFor(() =>
+        expect(currentUrl()).toBe(
+          "/calendar?event=cleaning%402026-10-03&month=2026-10&day=2026-10-03",
+        ),
+      );
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      expect(within(panel).getByRole("button", { name: /Grossputz/ })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(
+        within(panel).getByText("Alle 2 Wochen · Samstag · 10:00–12:00 · Alle"),
+      ).toBeInTheDocument();
+    });
+
+    it("expands an occurrence by its key and a «Demnächst» row selects its own day", async () => {
+      renderCalendar("/calendar?day=2026-10-17");
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
+      expect(currentUrl()).toBe("/calendar?day=2026-10-17&event=cleaning%402026-10-17");
+
+      await userEvent.click(screen.getByRole("tab", { name: "Demnächst" }));
+      const rows = screen.getAllByRole("button", { name: /^10:00–12:00.*Grossputz/ });
+      await userEvent.click(rows[2]);
+      expect(within(panel).getByRole("heading", { name: "Sa., 31. Okt." })).toBeInTheDocument();
+      expect(within(panel).getByRole("button", { name: /Grossputz/ })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(currentUrl()).toContain("event=cleaning%402026-10-31");
+    });
+  });
+});
+
+describe("Termin-Sheet: recurring events (Phase 7 slice C)", () => {
+  beforeEach(() => mockDesktop(true));
+
+  async function newEventOn(day: string, title: string) {
+    renderCalendar(`/calendar?day=${day}`);
+    await page();
+    await userEvent.click(screen.getByRole("button", { name: "Neuer Termin" }));
+    const dialog = sheet("Neuer Termin");
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Titel" }), title);
+    return dialog;
+  }
+
+  const created = () => eventServiceMock.createEvent.mock.calls[0][1];
+
+  it("creates «Grossputz» every 2 weeks on Saturday (REV-01)", async () => {
+    const dialog = await newEventOn("2026-10-03", "Grossputz");
+    expect(within(dialog).getByText("Wiederholt sich nicht")).toBeInTheDocument();
+    expect(within(dialog).queryByRole("radiogroup", { name: "Endet" })).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Alle N Wochen" }));
+    expect(within(dialog).getByText("Alle 2 Wochen · Samstag")).toBeInTheDocument();
+    expect(within(dialog).getByRole("radio", { name: "Nie" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    // No «Benutzerdefiniert» for events either (B2).
+    expect(
+      within(dialog).queryByRole("button", { name: "Benutzerdefiniert" }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Termin hinzufügen" }));
+    expect(created()).toMatchObject({
+      title: "Grossputz",
+      start: zonedToInstant("2026-10-03", "09:00", ZURICH),
+      end: zonedToInstant("2026-10-03", "10:00", ZURICH),
+      recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
+    });
+  });
+
+  it("offers «Am 3.» / «Am 1. Samstag» and «Nach N Mal» (D60, REV-02)", async () => {
+    const dialog = await newEventOn("2026-10-03", "Flohmarkt");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Monatlich" }));
+    expect(within(dialog).getByRole("radio", { name: "Am 3." })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Am 1. Samstag" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Nach N Mal" }));
+    expect(within(dialog).getByText("10")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Mehr" }));
+    expect(within(dialog).getByText("Monatlich am 1. Samstag · 11 Mal")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Termin hinzufügen" }));
+    expect(created().recurrence).toEqual({
+      freq: "monthly",
+      interval: 1,
+      byWeekday: [6],
+      bySetPos: 1,
+      count: 11,
+    });
+  });
+
+  it("«Am Datum» defaults to three months later and can't end before the start (D59, D66)", async () => {
+    const dialog = await newEventOn("2026-10-03", "Chor");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Wöchentlich" }));
+    await userEvent.click(within(dialog).getByRole("radio", { name: "Am Datum" }));
+    const until = within(dialog).getByLabelText("Endet am") as HTMLInputElement;
+    expect(until).toHaveValue("2027-01-31");
+    expect(within(dialog).getByText("Jeden Samstag · bis 31. Jan. 2027")).toBeInTheDocument();
+    fireEvent.change(until, { target: { value: "2026-10-02" } });
+    expect(
+      within(dialog).getByText("Das Enddatum darf nicht vor dem Beginn liegen."),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Termin hinzufügen" })).toBeDisabled();
+    fireEvent.change(until, { target: { value: "2026-12-19" } });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Termin hinzufügen" }));
+    expect(created().recurrence).toEqual({
+      freq: "weekly",
+      interval: 1,
+      byWeekday: [6],
+      until: "2026-12-19",
+    });
+  });
+
+  it("saves an off-schedule start on the first occurrence (B3)", async () => {
+    // Thu 1 Oct, then «Sa» instead of «Do» → the series starts on Sat 3 Oct, same times.
+    const dialog = await newEventOn("2026-10-01", "Markt");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Wöchentlich" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Samstag" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Donnerstag" }));
+    expect(within(dialog).getByText("Jeden Samstag")).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Termin hinzufügen" }));
+    expect(created()).toMatchObject({
+      start: zonedToInstant("2026-10-03", "09:00", ZURICH),
+      end: zonedToInstant("2026-10-03", "10:00", ZURICH),
+      recurrence: { freq: "weekly", interval: 1, byWeekday: [6] },
+    });
+  });
+
+  describe("editing and deleting a series (REV-04, D61, D62)", () => {
+    beforeEach(() => {
+      fakeStore.events = [
+        ...exampleEvents(),
+        timed("cleaning", "Grossputz", "2026-09-19", "10:00", "12:00", {
+          category: "home",
+          recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
+        }),
+      ];
+    });
+
+    async function editFromCard(day: string) {
+      renderCalendar(`/calendar?day=${day}`);
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
+      await userEvent.click(within(panel).getByRole("button", { name: "Bearbeiten" }));
+      return sheet("Termin bearbeiten");
+    }
+
+    it("opens the series with its first date and the hint, and changes only the end", async () => {
+      const dialog = await editFromCard("2026-10-17");
+      expect(
+        within(dialog).getByText(
+          "Änderungen gelten für alle Termine dieser Serie (seit Sa., 19. Sept.).",
+        ),
+      ).toBeInTheDocument();
+      expect(pill(dialog, "Beginn, Datum")).toHaveValue("2026-09-19");
+      expect(within(dialog).getByRole("button", { name: "Alle N Wochen" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(within(dialog).getByRole("button", { name: "Speichern" })).toBeDisabled();
+      await userEvent.click(within(dialog).getByRole("radio", { name: "Nach N Mal" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+      expect(eventServiceMock.updateEvent).toHaveBeenCalledWith("h1", "cleaning", {
+        recurrence: { freq: "weekly", interval: 2, byWeekday: [6], count: 10 },
+      });
+    });
+
+    it("«Nie» turns the series into a one-off event (B10)", async () => {
+      const dialog = await editFromCard("2026-10-03");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Nie" }));
+      await userEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+      expect(eventServiceMock.updateEvent).toHaveBeenCalledWith("h1", "cleaning", {
+        recurrence: null,
+      });
+      // The open card follows the event to its only date left, Sa., 19. Sept.
+      await waitFor(() => expect(currentUrl()).toContain("day=2026-09-19"));
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      expect(within(panel).getByText("Wiederholt sich nicht · 10:00–12:00")).toBeInTheDocument();
+    });
+
+    it("one-off events show no series hint", async () => {
+      renderCalendar("/calendar?day=2026-10-02");
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      await userEvent.click(within(panel).getByRole("button", { name: /Znacht/ }));
+      await userEvent.click(within(panel).getByRole("button", { name: "Bearbeiten" }));
+      expect(
+        within(sheet("Termin bearbeiten")).queryByText(/Änderungen gelten/),
+      ).not.toBeInTheDocument();
+    });
+
+    it("deletes the whole series after the series confirmation (D62)", async () => {
+      renderCalendar("/calendar?day=2026-10-17");
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
+      await userEvent.click(within(panel).getByRole("button", { name: "Löschen" }));
+      const confirm = screen.getByRole("alertdialog", { name: "«Grossputz» löschen?" });
+      expect(
+        within(confirm).getByText("Alle Termine dieser Serie verschwinden für Nevio und Anna."),
+      ).toBeInTheDocument();
+      await userEvent.click(within(confirm).getByRole("button", { name: "Löschen" }));
+      expect(eventServiceMock.deleteEvent).toHaveBeenCalledWith("h1", "cleaning");
+      expect(screen.queryByText("Dieser Termin wurde gelöscht.")).not.toBeInTheDocument();
+    });
   });
 });
