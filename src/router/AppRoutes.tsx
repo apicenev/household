@@ -1,6 +1,5 @@
 import { lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import ComingSoonPage from "../pages/ComingSoonPage";
 import {
   AuthReady,
   MemberRoute,
@@ -11,6 +10,8 @@ import {
 } from "./guards";
 
 const LoginPage = lazy(() => import("../pages/LoginPage"));
+const ActivityPage = lazy(() => import("../pages/ActivityPage"));
+const DashboardPage = lazy(() => import("../pages/DashboardPage"));
 const HouseholdPage = lazy(() => import("../pages/HouseholdPage"));
 const TasksPage = lazy(() => import("../pages/TasksPage"));
 const ShoppingPage = lazy(() => import("../pages/ShoppingPage"));
@@ -21,7 +22,7 @@ const JoinHouseholdPage = lazy(() => import("../pages/onboarding/JoinHouseholdPa
 // Dev-only primitives gallery; the DEV check lets the production build drop it.
 const UiGalleryPage = import.meta.env.DEV ? lazy(() => import("../pages/dev/UiGalleryPage")) : null;
 
-/** Route table (Phase 1 §1.9, Phase 2 §2.6, Phases 3, 5 and 6). */
+/** Route table (Phase 1 §1.9, Phase 2 §2.6, Phases 3, 5, 6 and 8). */
 export function AppRoutes() {
   return (
     <Routes>
@@ -41,11 +42,11 @@ export function AppRoutes() {
           </Route>
           {/* MemberRoute renders the shell around these. */}
           <Route element={<MemberRoute />}>
-            <Route path="/dashboard" element={<ComingSoonPage area="dashboard" />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
             <Route path="/tasks" element={<TasksPage />} />
             <Route path="/shopping" element={<ShoppingPage />} />
             <Route path="/calendar" element={<CalendarPage />} />
-            <Route path="/activity" element={<ComingSoonPage area="activity" />} />
+            <Route path="/activity" element={<ActivityPage />} />
             <Route path="/household" element={<HouseholdPage />} />
           </Route>
         </Route>

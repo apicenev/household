@@ -55,8 +55,8 @@ const initialEvents: EventsSnapshot = { events: [], loaded: false, error: null }
  * `loading` (which gates the shell) waits only for household and members; the task list has
  * its own loading and error state, so it never blocks the shell (Phase 3 D13, D14); so has the
  * shopping list (Phase 5 D38, D39) and the calendar (Phase 6 D49, D50; all events, B10). A
- * failing itemStats listener only means no suggestions, so its error is ignored. Phase 8 adds
- * activity here.
+ * failing itemStats listener only means no suggestions, so its error is ignored. The activity
+ * feed has its own listener on /activity (Phase 8 B1), so app start doesn't read it.
  */
 export function HouseholdProvider({
   householdId,

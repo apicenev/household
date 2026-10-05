@@ -14,7 +14,9 @@ rules_version = '2';
 //   households/{hid}/shoppingItems     members CRUD, validated                (Phase 5)
 //   households/{hid}/itemStats         members create / count ±1, no delete   (Phase 5)
 //   households/{hid}/events            members CRUD, validated                (Phases 6, 7)
-//   households/{hid}/activity          members create, append-only            (Phase 2)
+//   households/{hid}/activity          members create, append-only;           (Phase 2)
+//                                      feed list by createdAt, optionally      (Phase 8)
+//                                      by targetType (firestore.indexes.json)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
 // Multi-document writes (create a household, join, new code, profile edits) are single

@@ -430,3 +430,17 @@ export const eventServiceMock = {
   updateEvent: vi.fn<(hid: string, eventId: string, changes: EventChanges) => Promise<void>>(),
   deleteEvent: vi.fn<(hid: string, eventId: string) => Promise<void>>(),
 };
+
+/** An empty activity feed (Phase 8), for tests that only pass through /activity. */
+export const activityServiceMock = {
+  record: vi.fn(),
+  listenToActivity: (
+    _hid: string,
+    _targetType: string | undefined,
+    onChange: (items: unknown[]) => void,
+  ) => {
+    onChange([]);
+    return () => {};
+  },
+  loadOlderActivity: vi.fn(async () => []),
+};

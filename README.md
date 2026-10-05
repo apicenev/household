@@ -4,7 +4,7 @@ A mobile-first web app for the people living in one home: shared tasks with recu
 
 Portfolio project: a client-only React SPA on Firebase.
 
-> **Status:** Phase 1 (private login & app shell) implemented on `dev`; the app areas show «Bald verfügbar» until their phases.
+> **Status:** Phases 1–7 done; Phase 8 (Start dashboard and activity feed) implemented on `dev`, so every app area is built. Phase 9 (hardening and the v1.0 release) is next.
 >
 > **Private app:** only accounts created by the admin in the Firebase console can use it; self sign-up is disabled in Firebase. There is no sign-up and no password reset in the app. The UI is German only (de-CH).
 
@@ -41,7 +41,7 @@ npm run seed        # terminal 2, once — test accounts
 npm run dev:emu     # terminal 2 — app at http://localhost:5173
 ```
 
-`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). The household also gets the design's shopping list (six open items, four bought) and a purchase history for the suggestions («Brot» 14×, «Milch» 12×, …), and eleven calendar events relative to today: five one-off events («Möbellieferung» tomorrow, «Znacht mit Freunden», «Arzttermin» for Anna, the 8-day «Ferien» and a «Spieleabend» past midnight) and six series («Grossputz» every 2 weeks with one date inside «Ferien», «Altpapiersammlung» every 2 weeks, «Miete bezahlen» monthly, «Geburtstag Nevio» yearly, «Yoga-Kurs» for 8 times and a «Schwimmkurs» that has ended), all added whenever missing. An emulator seeded before Phase 7 keeps its one-off «Grossputz» / «Altpapiersammlung» next to the new series; start from a fresh emulator to avoid the duplicates. `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna (and, on a fresh household, the bought items show «von Anna»). Running it again keeps the household and replaces the code once it has expired.
+`npm run seed -- --household` also creates the household «Musterstrasse 12» with Nevio as owner, the example tasks of the design (relative to today, only if the household has none yet) plus three recurring tasks («Pflanzen giessen» every 4 days, «Bettwäsche wechseln» every 2 weeks, «Bad putzen» weekly; added whenever missing) and prints its invite code. Anna stays without a household: log in as Anna in a second browser profile and join with the code («Mit Code beitreten»). The household also gets the design's shopping list (six open items, four bought) and a purchase history for the suggestions («Brot» 14×, «Milch» 12×, …), and eleven calendar events relative to today: five one-off events («Möbellieferung» tomorrow, «Znacht mit Freunden», «Arzttermin» for Anna, the 8-day «Ferien» and a «Spieleabend» past midnight) and six series («Grossputz» every 2 weeks with one date inside «Ferien», «Altpapiersammlung» every 2 weeks, «Miete bezahlen» monthly, «Geburtstag Nevio» yearly, «Yoga-Kurs» for 8 times and a «Schwimmkurs» that has ended), all added whenever missing. Since Phase 8 it also writes an activity feed over the last weeks (68 entries, once): every entry type, single purchases and a burst of four that the feed groups, entries whose targets are gone, and enough older ones for «Mehr laden». An emulator seeded before Phase 7 keeps its one-off «Grossputz» / «Altpapiersammlung» next to the new series; start from a fresh emulator to avoid the duplicates. `npm run seed -- --with-anna` makes Anna a member right away, so «Bad putzen» rotates Nevio → Anna (and, on a fresh household, the bought items show «von Anna»). Running it again keeps the household and replaces the code once it has expired.
 
 Uses `.env.emulator` and the demo project ID `demo-household`; nothing touches a real project. Emulator data is kept in `emulator-data/` between restarts (git-ignored).
 
@@ -116,7 +116,8 @@ households/{hid}/events/{id}         title, description?, category, allDay, star
                                      (timed: instants in the household time zone; all-day: 00:00 UTC of the first /
                                      last day, so a time-zone change never moves them)
 households/{hid}/activity/{id}       append-only log (member joined; task created / completed / assigned;
-                                     item added / purchased; event created)
+                                     item added / purchased; event created); the feed reads it newest
+                                     first, optionally by targetType (index in firestore.indexes.json)
 invites/{code}                       code lookup (ABC-1234) with a small preview for «Code gefunden»
 ```
 
@@ -131,7 +132,7 @@ invites/{code}                       code lookup (ABC-1234) with a small preview
 - `itemStats` docs are created with count 1 and change by exactly +1 (a purchase, server time) or −1 (an uncheck, never below 0); they're never deleted. The id must be the lowercased name for ASCII names (the rules' `lower()` leaves other letters alone, so non-ASCII names only need a plausible id). An uncheck never depends on the stats doc.
 - Every member reads and writes every event; the rules check each write as a whole event (title 1–200 without leading / trailing spaces, description ≤ 2000, category, end ≥ start, at most 366 calendar days, all-day dates at 00:00 UTC, participants «household» or 1–20 distinct **current** members), so an edit must drop members who have left. A series' `recurrence` is checked like a task rule, plus monthly by weekday (one weekday + position 1–4 or last) and either `until` («YYYY-MM-DD») or `count` (2–99); `exceptions` is rejected (REV-07 is Phase 9). Tasks still reject the event-only keys.
 - Task, shopping and event activity entries must match their target after the batch (title / name snapshot, «done» or checked for a completion / purchase).
-- Activity entries are append-only; everything not matched is denied.
+- Activity entries are append-only; members list them (the feed's filter by type needs the composite index, deployed with `npm run deploy:rules`); everything not matched is denied.
 
 ## Deployment
 

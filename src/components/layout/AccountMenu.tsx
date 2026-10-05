@@ -1,5 +1,6 @@
 import {
   ArrowRightStartOnRectangleIcon,
+  BoltIcon,
   UserCircleIcon,
   UsersIcon,
 } from "@heroicons/react/24/outline";
@@ -12,7 +13,8 @@ import { Avatar } from "../ui/Avatar";
 import { Menu, type MenuEntry, type MenuTriggerProps } from "../ui/Menu";
 
 /**
- * «Kontomenü»: Profil, Haushalt, Abmelden (UI-04). Shared by the top bar and the sidebar.
+ * «Kontomenü»: Profil, Aktivität (Phase 8 D76: the way to the feed on phones), Haushalt,
+ * Abmelden (UI-04). Shared by the top bar and the sidebar.
  * `logoutOnly`: just «Abmelden», for onboarding, where there's no household yet (D6).
  */
 export function AccountMenu({
@@ -55,6 +57,7 @@ export function AccountMenu({
                 icon: UserCircleIcon,
                 onSelect: () => navigate("/household#profil"),
               },
+              { label: areas.activity, icon: BoltIcon, onSelect: () => navigate("/activity") },
               { label: areas.household, icon: UsersIcon, onSelect: () => navigate("/household") },
               "separator",
             ] satisfies MenuEntry[])),

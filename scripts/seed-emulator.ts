@@ -9,7 +9,8 @@
  * (relative to today), unless it has tasks already. Since Phase 4 it also gets three recurring
  * tasks with fixed ids, added whenever they're missing (also to a household seeded before).
  * Since Phase 5 also the design's shopping list and purchase history, likewise. Since Phase 6
- * also the calendar's example events (relative to today, fixed ids), likewise.
+ * also the calendar's example events (relative to today, fixed ids), likewise. Since Phase 8
+ * also an activity feed over the last weeks (fixed ids), written once.
  *
  * With `--with-anna` (Phase 4, implies `--household`) Anna joins «Musterstrasse 12» like
  * joinHousehold would, and «Bad putzen» rotates Nevio → Anna.
@@ -605,6 +606,126 @@ async function seedAnnaJoin(db: Firestore, hid: string, code: string, uid: strin
   console.log(`+ ${accounts[1].email} joined «${HOUSEHOLD_NAME}»`);
 }
 
+/**
+ * A realistic activity feed (Phase 8 §8.9) relative to now, with fixed ids («seed-activity-…»),
+ * written once: every entry type, single purchases plus a burst of four the feed groups (D79),
+ * an assignment with «Vorher», entries whose targets are gone (snapshot titles), and 50 older
+ * entries, so «Mehr laden» shows. Entries are Anna's where it makes sense once she's a member.
+ */
+async function seedActivity(
+  db: Firestore,
+  hid: string,
+  ownerUid: string,
+  annaUid: string | null,
+): Promise<void> {
+  const activity = db.collection(`households/${hid}/activity`);
+  if ((await activity.doc("seed-activity-01").get()).exists) {
+    console.log("= activity exists");
+    return;
+  }
+  const anna = annaUid ?? ownerUid;
+  const tasks = (await db.collection(`households/${hid}/tasks`).get()).docs;
+  const taskId = (title: string, status: "open" | "done") =>
+    tasks.find((t) => t.data().title === title && t.data().status === status)?.id ??
+    `seed-gone-${title}`;
+  const minutesAgo = (minutes: number) => Timestamp.fromMillis(Date.now() - minutes * 60_000);
+  const at = (daysAgo: number, time: string) =>
+    Timestamp.fromDate(zonedToInstant(dayFromToday(-daysAgo), time, "Europe/Zurich"));
+
+  type Entry = {
+    actorId: string;
+    type: string;
+    targetType: "task" | "item" | "event" | "member";
+    targetId: string;
+    targetTitle: string;
+    details?: Record<string, string | null>;
+    createdAt: Timestamp;
+  };
+  const item = (actorId: string, type: string, targetId: string, title: string, when: Timestamp) =>
+    ({ actorId, type, targetType: "item", targetId, targetTitle: title, createdAt: when }) as Entry;
+  const task = (actorId: string, type: string, targetId: string, title: string, when: Timestamp) =>
+    ({ actorId, type, targetType: "task", targetId, targetTitle: title, createdAt: when }) as Entry;
+  const event = (actorId: string, targetId: string, title: string, when: Timestamp) =>
+    ({
+      actorId,
+      type: "event_created",
+      targetType: "event",
+      targetId,
+      targetTitle: title,
+      createdAt: when,
+    }) as Entry;
+
+  const entries: Entry[] = [
+    // Today: the seeded purchases one hour apart (single rows), a new item and an event.
+    item(ownerUid, "item_added", "seed-milk", "Milch", minutesAgo(50)),
+    item(anna, "item_purchased", "seed-oil", "Olivenöl", minutesAgo(60)),
+    item(anna, "item_purchased", "seed-tp", "WC-Papier", minutesAgo(120)),
+    item(anna, "item_purchased", "seed-eggs", "Eier", minutesAgo(180)),
+    item(anna, "item_purchased", "seed-bread", "Brot", minutesAgo(240)),
+    event(anna, "seed-dinner", "Znacht mit Freunden", minutesAgo(300)),
+    // Yesterday: a completion, an assignment removed («Vorher: Nevio»), a burst of four
+    // purchases within 15 minutes whose items were cleared since (D79).
+    task(
+      ownerUid,
+      "task_completed",
+      taskId("Bad putzen", "done"),
+      "Bad putzen",
+      minutesAgo(24 * 60),
+    ),
+    {
+      ...task(
+        ownerUid,
+        "task_assigned",
+        taskId("Küche putzen", "open"),
+        "Küche putzen",
+        at(1, "08:20"),
+      ),
+      details: { fromId: ownerUid, fromName: "Nevio", toId: null, toName: null },
+    },
+    item(anna, "item_purchased", "seed-gone-butter", "Butter", at(1, "17:55")),
+    item(anna, "item_purchased", "seed-gone-cheese", "Käse", at(1, "17:50")),
+    item(anna, "item_purchased", "seed-gone-apples", "Äpfel", at(1, "17:45")),
+    item(anna, "item_purchased", "seed-gone-yoghurt", "Joghurt", at(1, "17:40")),
+    // The days before: completions, created tasks and events, a deleted task.
+    task(anna, "task_completed", "seed-gone-sheets", "Bettwäsche wechseln", at(2, "19:02")),
+    task(
+      ownerUid,
+      "task_completed",
+      taskId("Altpapier rausbringen", "done"),
+      "Altpapier rausbringen",
+      minutesAgo(3 * 24 * 60),
+    ),
+    event(ownerUid, "seed-trip", "Ferien", at(4, "20:30")),
+    task(ownerUid, "task_created", "seed-bathroom", "Bad putzen", at(5, "09:10")),
+    task(ownerUid, "task_created", "seed-water", "Pflanzen giessen", at(5, "09:05")),
+    task(anna, "task_created", "seed-gone-windows", "Fenster putzen", at(6, "18:00")),
+  ];
+  // 50 older entries, 8–40 days ago, for «Mehr laden» (ACT-04).
+  for (let i = 0; i < 50; i += 1) {
+    const daysAgo = 8 + Math.floor((i * 32) / 50);
+    const time = `${String(7 + (i % 12)).padStart(2, "0")}:${String((i * 7) % 60).padStart(2, "0")}`;
+    const who = i % 2 === 0 ? anna : ownerUid;
+    entries.push(
+      i % 3 === 0
+        ? item(
+            who,
+            "item_purchased",
+            `seed-gone-old-${i}`,
+            i % 2 ? "Brot" : "Milch",
+            at(daysAgo, time),
+          )
+        : task(who, "task_completed", `seed-gone-old-${i}`, "Pflanzen giessen", at(daysAgo, time)),
+    );
+  }
+
+  const batch = db.batch();
+  entries.forEach((entry, index) => {
+    batch.set(activity.doc(`seed-activity-${String(index + 1).padStart(2, "0")}`), entry);
+  });
+  await batch.commit();
+  console.log(`+ ${entries.length} activity entries`);
+}
+
 async function main() {
   assertEmulatorOnly();
   if (!(await emulatorsRunning())) {
@@ -645,6 +766,7 @@ async function main() {
     await seedRecurringTasks(db, hid, uids[0], annaUid);
     await seedShopping(db, hid, uids[0], annaUid);
     await seedEvents(db, hid, uids[0], annaUid);
+    await seedActivity(db, hid, uids[0], annaUid);
     const invite = (await db.doc(`invites/${code}`).get()).data();
     const validUntil = inviteExpiresAt((invite?.createdAt as Timestamp).toDate());
     console.log(

@@ -8,6 +8,9 @@ import { AuthContext, type AuthContextValue, type AuthUser } from "../lib/auth/u
 import { AppRoutes } from "../router/AppRoutes";
 import { fakeStore, nevioProfile } from "./householdFakes";
 
+/** Start's h1 is the greeting (Phase 8, `Dashboard.dc.html`). */
+const START_HEADING = /^Guten (Morgen|Tag|Abend)/;
+
 vi.mock("../lib/firebase", () => ({ auth: {}, db: {} }));
 vi.mock("../services/householdService", () =>
   import("./householdFakes").then((fakes) => fakes.householdServiceMock),
@@ -23,6 +26,9 @@ vi.mock("../services/shoppingService", () =>
 );
 vi.mock("../services/eventService", () =>
   import("./householdFakes").then((fakes) => fakes.eventServiceMock),
+);
+vi.mock("../services/activityService", () =>
+  import("./householdFakes").then((fakes) => fakes.activityServiceMock),
 );
 
 const nevio: AuthUser = { uid: "nevio", email: "nevio@example.ch" };
@@ -141,13 +147,17 @@ describe("routing & guards", () => {
 
   it("sends signed-in users away from /login to /dashboard", async () => {
     renderApp("/login", signedIn);
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(currentPath()).toBe("/dashboard");
   });
 
   it("redirects / to /dashboard", async () => {
     renderApp("/", signedIn);
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(currentPath()).toBe("/dashboard");
   });
 
@@ -196,7 +206,9 @@ describe("household guards (Phase 2)", () => {
 
   it("sends members away from /onboarding to /dashboard", async () => {
     renderApp("/onboarding/join", signedIn);
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(currentPath()).toBe("/dashboard");
   });
 
@@ -222,7 +234,9 @@ describe("household guards (Phase 2)", () => {
     expect(fakeStore.subscribed).toEqual([]);
 
     setAuth({ confirmedHouseholdId: "h1" });
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(currentPath()).toBe("/dashboard");
     expect(fakeStore.subscribed).toEqual(["h1"]);
   });
@@ -241,7 +255,9 @@ describe("household guards (Phase 2)", () => {
     renderApp("/dashboard", signedIn);
     expect(screen.getByRole("heading", { name: "Household" })).toBeInTheDocument();
     act(() => fakeStore.emit());
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
   });
 
   it("shows the error state inside the shell and subscribes again on retry (D8)", async () => {
@@ -278,9 +294,9 @@ describe("household guards (Phase 2)", () => {
 
   it("tears down the listeners when the household changes", async () => {
     const { setAuth } = renderApp("/dashboard", signedIn);
-    await screen.findByRole("heading", { name: "Start", level: 1 });
+    await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 });
     setAuth({ confirmedHouseholdId: "h2", profile: { ...nevioProfile, householdId: "h2" } });
-    await screen.findByRole("heading", { name: "Start", level: 1 });
+    await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 });
     expect(fakeStore.unsubscribed).toEqual(["h1"]);
     expect(fakeStore.subscribed).toEqual(["h1", "h2"]);
   });

@@ -75,6 +75,11 @@ export function formatNumericDate(date: Date, timeZone = DEFAULT_TIME_ZONE): str
   return fmt(date, "dd.MM.yyyy", timeZone);
 }
 
+/** «Samstag» */
+export function formatWeekdayLong(date: Date, timeZone = DEFAULT_TIME_ZONE): string {
+  return fmt(date, "EEEE", timeZone);
+}
+
 /** «Sa.» */
 export function formatWeekday(date: Date, timeZone = DEFAULT_TIME_ZONE): string {
   return fmt(date, "EEE", timeZone);
@@ -135,6 +140,46 @@ export function completedLabel(
   if (days === 0) return "Heute";
   if (days === -1) return "Gestern";
   return formatDate(completedAt, timeZone);
+}
+
+/** «Mo., 28. Sept.», with the year if it isn't the year of `now` («Mo., 28. Sept. 2025»). */
+export function formatDateWithYear(
+  date: Date,
+  now: Date = new Date(),
+  timeZone = DEFAULT_TIME_ZONE,
+): string {
+  const year = fmt(date, "yyyy", timeZone);
+  const label = formatDate(date, timeZone);
+  return year === fmt(now, "yyyy", timeZone) ? label : `${label} ${year}`;
+}
+
+/**
+ * When something happened, for «Kürzlich erledigt» (Phase 8 D72): «Gerade eben» within the last
+ * minute, the time «07:50» today, «Gestern», otherwise the date (with the year if not this year).
+ */
+export function recentTimeLabel(
+  date: Date,
+  now: Date = new Date(),
+  timeZone = DEFAULT_TIME_ZONE,
+): string {
+  if (now.getTime() - date.getTime() < 60_000) return "Gerade eben";
+  const days = calendarDaysFrom(date, now, timeZone);
+  if (days === 0) return formatTime(date, timeZone);
+  if (days === -1) return "Gestern";
+  return formatDateWithYear(date, now, timeZone);
+}
+
+/**
+ * A later due date inside a sentence (Phase 8 D68): «morgen», «am Samstag» within the next six
+ * days, otherwise «am Sa., 10. Okt.». Both are date keys in the household zone.
+ */
+export function laterDuePhrase(dueDate: string, todayKey: string): string {
+  const days = differenceInCalendarDays(fromDateKey(dueDate), fromDateKey(todayKey), {
+    in: tz("UTC"),
+  });
+  if (days === 1) return "morgen";
+  if (days > 1 && days < 7) return `am ${formatWeekdayLong(fromDateKey(dueDate), "UTC")}`;
+  return `am ${formatDate(fromDateKey(dueDate), "UTC")}`;
 }
 
 /** Calendar date as «2026-10-03» in the given time zone (the value format of <input type="date">). */

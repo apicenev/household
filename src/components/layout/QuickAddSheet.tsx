@@ -15,8 +15,7 @@ import { useOptionalShopping } from "../shopping/shoppingContext";
 import { QuickAddTaskForm } from "../tasks/QuickAddTaskForm";
 import { useOptionalTasks } from "../tasks/taskContext";
 import { ComingSoon } from "./ComingSoon";
-
-type Entry = "task" | "item" | "event";
+import type { QuickAddEntry as Entry } from "./quickAddContext";
 
 const entries: Record<Entry, { label: string; icon: typeof CheckCircleIcon }> = {
   task: { label: terms.task, icon: CheckCircleIcon },
@@ -27,10 +26,25 @@ const entries: Record<Entry, { label: string; icon: typeof CheckCircleIcon }> = 
 /**
  * Schnellerfassung (Sheets.dc.html, from the centre + and the sidebar «Neu»): Aufgabe /
  * Einkauf / Termin («Aufgabe» since Phase 3, «Einkauf» since Phase 5, «Termin» since Phase 6).
- * Without a loaded household (D8) all three show «Bald verfügbar».
+ * Without a loaded household (D8) all three show «Bald verfügbar». `initialEntry` opens it on
+ * that part (Start's «Artikel hinzufügen», Phase 8 B7); otherwise it keeps the last one.
  */
-export function QuickAddSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function QuickAddSheet({
+  open,
+  onClose,
+  initialEntry,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialEntry?: Entry;
+}) {
   const [entry, setEntry] = useState<Entry>("task");
+  // Switch to `initialEntry` each time the sheet opens (state adjusted during render).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open && initialEntry) setEntry(initialEntry);
+  }
   const current = entries[entry];
   const tasks = useOptionalTasks();
   const shopping = useOptionalShopping();

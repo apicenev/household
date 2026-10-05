@@ -70,6 +70,8 @@ const {
 } = await import("../../services/shoppingService");
 const { createEvent, deleteEvent, listenToEvents, updateEvent } =
   await import("../../services/eventService");
+const { listenToActivity, loadOlderActivity } = await import("../../services/activityService");
+const { mergeFeed } = await import("../../domain/activity");
 const { allDayToStored } = await import("../../domain/eventTime");
 const { normalizeParticipants } = await import("../../domain/calendar");
 
@@ -140,6 +142,12 @@ describe("services against the rules", () => {
     let household = await readHousehold(hid);
     expect(household).toMatchObject({ ownerId: "nevio", memberIds: ["nevio"], weekStartsOn: 1 });
     expect(await adminData(`users/nevio`)).toMatchObject({ householdId: hid });
+    // Creating a household records nothing; the owner doesn't «join» (Phase 8 B10).
+    let created = 0;
+    await asAdmin(env, async (db) => {
+      created = (await getDocs(collection(db, "households", hid, "activity"))).size;
+    });
+    expect(created).toBe(0);
 
     signInAs(anna);
     const invite = await getInvite(household.inviteCode);
@@ -728,5 +736,94 @@ describe("event services against the rules (Phase 6)", () => {
         participants: normalizeParticipants(["anna", "gone"], members),
       }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("activity feed services against the rules (Phase 8)", () => {
+  const hid = "h1";
+  type Item = Awaited<ReturnType<typeof loadOlderActivity>>[number];
+
+  /** 120 entries a minute apart; every third one is a shopping entry. */
+  async function seedEntries(count: number, start = Date.UTC(2026, 8, 1, 8, 0), prefix = "e") {
+    await asAdmin(env, async (db) => {
+      for (let i = 0; i < count; i += 1) {
+        const item = i % 3 === 0;
+        await setDoc(
+          doc(db, "households", hid, "activity", `${prefix}${String(i).padStart(3, "0")}`),
+          {
+            actorId: "anna",
+            type: item ? "item_added" : "task_created",
+            targetType: item ? "item" : "task",
+            targetId: `t${i}`,
+            targetTitle: `Eintrag ${i}`,
+            createdAt: new Date(start + i * 60_000),
+          },
+        );
+      }
+    });
+  }
+
+  /** The live first page, as soon as it has `count` entries. */
+  async function livePage(targetType: "item" | undefined, count: number) {
+    let items: Item[] = [];
+    const stop = listenToActivity(
+      hid,
+      targetType,
+      (next) => (items = next),
+      (error) => {
+        throw error;
+      },
+    );
+    await vi.waitFor(() => expect(items).toHaveLength(count));
+    return { stop, current: () => items };
+  }
+
+  beforeEach(async () => {
+    await seedHousehold(env, { hid, members: [anna] });
+  });
+
+  it("pages 50 / 50 / 20 newest first without duplicates (ACT-04, B2)", async () => {
+    await seedEntries(120);
+    signInAs(nevio);
+    const live = await livePage(undefined, 50);
+    live.stop();
+    const first = live.current();
+    const second = await loadOlderActivity(hid, undefined, first[49].cursor);
+    const third = await loadOlderActivity(hid, undefined, second[49].cursor);
+    expect(second).toHaveLength(50);
+    expect(third).toHaveLength(20);
+    const titles = [...first, ...second, ...third].map((item) => item.entry.targetTitle);
+    expect(titles).toEqual(Array.from({ length: 120 }, (_, i) => `Eintrag ${119 - i}`));
+  });
+
+  it("filters by target type on the server (ACT-08, B3)", async () => {
+    await seedEntries(120);
+    signInAs(anna);
+    const live = await livePage("item", 40);
+    live.stop();
+    const items = live.current();
+    expect(items.every((item) => item.entry.targetType === "item")).toBe(true);
+    expect(items[0].entry.targetTitle).toBe("Eintrag 117");
+    expect(await loadOlderActivity(hid, "item", items[39].cursor)).toEqual([]);
+  });
+
+  it("continues after the oldest merged entry while new ones arrive (B2)", async () => {
+    await seedEntries(60);
+    signInAs(nevio);
+    const live = await livePage(undefined, 50);
+    try {
+      let kept = live.current();
+      // Five new entries push «Eintrag 10…14» off the live page; the merged list keeps them.
+      await seedEntries(5, Date.UTC(2026, 8, 2, 8, 0), "new");
+      await vi.waitFor(() => expect(live.current()[0].entry.id).toBe("new004"));
+      kept = mergeFeed(live.current(), kept);
+      expect(kept).toHaveLength(55);
+      const older = await loadOlderActivity(hid, undefined, kept[kept.length - 1].cursor);
+      expect(older.map((item) => item.entry.targetTitle)).toEqual(
+        Array.from({ length: 10 }, (_, i) => `Eintrag ${9 - i}`),
+      );
+    } finally {
+      live.stop();
+    }
   });
 });
