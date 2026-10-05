@@ -9,6 +9,9 @@ import { AppRoutes } from "../router/AppRoutes";
 import type { Invite } from "../types";
 import { fakeStore, householdServiceMock, nevioProfile } from "./householdFakes";
 
+/** Start's h1 is the greeting (Phase 8, `Dashboard.dc.html`). */
+const START_HEADING = /^Guten (Morgen|Tag|Abend)/;
+
 vi.mock("../lib/firebase", () => ({ auth: {}, db: {} }));
 vi.mock("../services/householdService", () =>
   import("./householdFakes").then((fakes) => fakes.householdServiceMock),
@@ -206,7 +209,9 @@ describe("Haushalt erstellen", () => {
     expect(screen.getByRole("button", { name: "Erstellt…" })).toBeInTheDocument();
 
     setAuth({ confirmedHouseholdId: "h1", profile: nevioProfile });
-    expect(await screen.findByRole("heading", { name: "Start", level: 1 })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: START_HEADING, level: 1 }, { timeout: 3000 }),
+    ).toBeInTheDocument();
     expect(currentPath()).toBe("/dashboard");
   });
 

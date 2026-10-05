@@ -359,7 +359,9 @@ describe("check-off (B6)", () => {
     await page();
     await userEvent.click(screen.getByRole("checkbox", { name: "Abhaken: Küche putzen" }));
     await userEvent.click(screen.getAllByRole("link", { name: "Start" })[0]);
-    expect(currentUrl()).toBe("/dashboard");
+    // The lazy Start page loads first (a router transition); still well within the 700 ms,
+    // so the completion comes from leaving the page, not from the timer.
+    await waitFor(() => expect(currentUrl()).toBe("/dashboard"), { timeout: 500 });
     expect(taskServiceMock.completeTask).toHaveBeenCalledTimes(1);
     expect(taskServiceMock.completeTask.mock.calls[0][1]).toMatchObject({ id: "kitchen" });
   });

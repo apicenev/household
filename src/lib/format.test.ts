@@ -13,7 +13,11 @@ import {
   formatShortRange,
   formatTime,
   formatTimeRange,
+  formatDateWithYear,
+  formatWeekdayLong,
+  laterDuePhrase,
   quickPickDates,
+  recentTimeLabel,
   relativeDay,
 } from "./format";
 
@@ -201,5 +205,35 @@ describe("calendar formats (Phase 6)", () => {
     expect(formatShortRange(key("2026-12-30"), key("2027-01-02"))).toBe(
       "30. Dez. 2026 – 2. Jan. 2027",
     );
+  });
+});
+
+describe("Phase 8 helpers", () => {
+  const now = utc("2026-09-30T06:12:00Z"); // Mi., 30. Sept., 08:12 in Zurich
+
+  it("formatWeekdayLong: «Samstag»", () => {
+    expect(formatWeekdayLong(utc("2026-10-03T08:00:00Z"))).toBe("Samstag");
+  });
+
+  it("formatDateWithYear: the year only for another year", () => {
+    expect(formatDateWithYear(utc("2026-09-28T08:00:00Z"), now)).toBe("Mo., 28. Sept.");
+    expect(formatDateWithYear(utc("2025-09-29T08:00:00Z"), now)).toBe("Mo., 29. Sept. 2025");
+  });
+
+  it("recentTimeLabel (D72): «Gerade eben», the time today, «Gestern», the date", () => {
+    expect(recentTimeLabel(utc("2026-09-30T06:11:30Z"), now)).toBe("Gerade eben");
+    expect(recentTimeLabel(utc("2026-09-30T05:50:00Z"), now)).toBe("07:50");
+    // 00:30 local today, just after midnight.
+    expect(recentTimeLabel(utc("2026-09-29T22:30:00Z"), now)).toBe("00:30");
+    expect(recentTimeLabel(utc("2026-09-29T21:59:00Z"), now)).toBe("Gestern");
+    expect(recentTimeLabel(utc("2026-09-28T08:00:00Z"), now)).toBe("Mo., 28. Sept.");
+    expect(recentTimeLabel(utc("2025-12-24T08:00:00Z"), now)).toBe("Mi., 24. Dez. 2025");
+  });
+
+  it("laterDuePhrase (D68): «morgen», «am Samstag» within six days, else the date", () => {
+    expect(laterDuePhrase("2026-10-01", "2026-09-30")).toBe("morgen");
+    expect(laterDuePhrase("2026-10-03", "2026-09-30")).toBe("am Samstag");
+    expect(laterDuePhrase("2026-10-06", "2026-09-30")).toBe("am Dienstag");
+    expect(laterDuePhrase("2026-10-07", "2026-09-30")).toBe("am Mi., 7. Okt.");
   });
 });

@@ -398,3 +398,110 @@ export const calendarCopy = {
   /** D66 */
   untilBeforeStart: "Das Enddatum darf nicht vor dem Beginn liegen.",
 } as const;
+
+/** Start (Phase 8): `Dashboard.dc.html`, D67–D76. */
+export const dashboardCopy = {
+  /** Screen reader status of the «Start lädt» skeleton (`States`). */
+  loading: "Start wird geladen",
+  overdue: terms.overdue,
+  today: terms.today,
+  shopping: areas.shopping,
+  upcoming: terms.upcoming,
+  recent: terms.recentlyDone,
+  allTasks: "Alle Aufgaben",
+  showAll: actions.showAll,
+  calendar: areas.calendar,
+  activity: areas.activity,
+  /** «Demnächst» subtitle: phones / desktop. */
+  nextSevenDays: "Nächste 7 Tage",
+  sevenDays: "7 Tage",
+  /** «2 offen» next to «Heute» and «Einkauf». */
+  openCount: (count: number) => `${count} offen`,
+  todayDone: terms.done,
+  allBought: "Alles gekauft",
+  /** D69: the summary under the greeting. */
+  tasksToday: (count: number) =>
+    count === 0
+      ? "Heute nichts mehr zu tun"
+      : `${count} ${count === 1 ? "Aufgabe" : "Aufgaben"} heute`,
+  itemsOpen: (count: number) =>
+    count === 0 ? "nichts auf der Einkaufsliste" : `${count} Artikel offen`,
+  eventsThisWeek: (count: number) =>
+    count === 0
+      ? "keine Termine diese Woche"
+      : `${count} ${count === 1 ? "Termin" : "Termine"} diese Woche`,
+  /** D67 / D68 */
+  allDone: "Alles erledigt 🎉",
+  wellDone: (memberCount: number) =>
+    memberCount < 2
+      ? "Gut gemacht."
+      : memberCount === 2
+        ? "Gut gemacht, ihr zwei."
+        : "Gut gemacht, ihr alle.",
+  /** The sentence ends in one «.», also after «am Sa., 10. Okt.». */
+  nextUp: (title: string, when: string) =>
+    `Als Nächstes: «${title}» ${when}${when.endsWith(".") ? "" : "."}`,
+  nothingToday: "Heute steht nichts an.",
+  addTask: "Aufgabe hinzufügen",
+  addItem: "Artikel hinzufügen",
+  /** D70 */
+  emptyShopping: "Nichts auf der Liste.",
+  /** D71 */
+  nothingPlanned: "Nichts geplant",
+  upcomingEmptyText: "In den nächsten 7 Tagen steht nichts an.",
+  /** D72 */
+  emptyRecent: "Noch nichts erledigt.",
+  justNow: "Gerade eben",
+  /** «Nevio hat «Bad putzen» erledigt» (the name is set in bold). */
+  doneVerb: "hat",
+  doneTail: "erledigt",
+} as const;
+
+/** Aktivität (Phase 8): `Activity.dc.html`, D77–D82. */
+export const activityCopy = {
+  subtitle: "Was im Haushalt passiert ist – live für alle.",
+  filterLabel: "Filter",
+  filters: {
+    all: "Alle",
+    task: "Aufgaben",
+    item: "Einkauf",
+    event: "Kalender",
+    member: "Mitglieder",
+  },
+  /** Type pill on desktop rows. */
+  typeLabels: {
+    task: terms.task,
+    item: areas.shopping,
+    event: terms.event,
+    member: terms.member,
+  },
+  empty: "Noch nichts passiert",
+  /** D81 */
+  loadMore: "Mehr laden",
+  loadError: "Aktivität konnte nicht geladen werden.",
+  /** D82 */
+  formerMember: "Ehemaliges Mitglied",
+  /** D77: «{who} {verb} {what}{tail}». */
+  has: "hat",
+  is: "ist",
+  completed: " erledigt",
+  taskCreated: " erfasst",
+  assignedTo: (name: string) => ` ${name} zugewiesen`,
+  tookOver: " übernommen",
+  unassignVerb: "hat die Zuweisung von",
+  unassigned: " entfernt",
+  addedToShopping: " zum Einkauf hinzugefügt",
+  bought: " gekauft",
+  eventCreated: " erstellt",
+  joined: " beigetreten",
+  itemCount: (count: number) => `${count} Artikel`,
+  quoted: (title: string) => `«${title}»`,
+  /** D78 sub lines */
+  previously: (name: string) => `Vorher: ${name}`,
+  nobody: "niemand",
+  nextTurn: (name: string, date: string) => `Nächstes Mal ist ${name} dran · ${date}`,
+  nextOn: (date: string) => `Nächstes Mal am ${date}`,
+  /** D79: up to 5 names, then «und 3 weitere». */
+  purchasedNames: (names: readonly string[], rest: number) =>
+    rest > 0 ? `${names.join(", ")} und ${rest} weitere` : names.join(", "),
+} as const;
