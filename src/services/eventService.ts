@@ -12,12 +12,18 @@ import {
 } from "firebase/firestore";
 import { eventConverter } from "../lib/converters/eventConverter";
 import { db } from "../lib/firebase";
-import type { CalendarEvent, EventChanges, EventParticipants, NewEventInput } from "../types";
+import type {
+  CalendarEvent,
+  EventChanges,
+  EventParticipants,
+  NewEventInput,
+  RecurrenceRule,
+} from "../types";
 import { record } from "./activityService";
 
 /**
  * The calendar of a household (Phase 6). Creating an event writes «event_created» in the same
- * batch (ACT-01, ACT-05, B12); edits and deletes write no activity. Times are stored as given
+ * batch (ACT-01, ACT-05, B12), once per series (Phase 7 B14); edits and deletes write no activity. Times are stored as given
  * (B2: all-day dates at 00:00 UTC, built with `allDayToStored`). Every function returns the
  * commit promise: the UI doesn't wait for it (latency compensation), it only reports a
  * rejection.
@@ -33,6 +39,13 @@ function eventRef(householdId: string, eventId: string) {
 
 function participantsData(participants: EventParticipants): EventParticipants {
   return participants === "household" ? "household" : [...participants];
+}
+
+/** A rule without `undefined` fields (Firestore rejects them). */
+function recurrenceData(rule: RecurrenceRule): RecurrenceRule {
+  return Object.fromEntries(
+    Object.entries(rule).filter(([, value]) => value !== undefined),
+  ) as unknown as RecurrenceRule;
 }
 
 /** Realtime list of all events (B10), incl. pending-write state. */
@@ -67,6 +80,7 @@ export function createEvent(
     start: Timestamp.fromDate(input.start),
     end: Timestamp.fromDate(input.end),
     participants: participantsData(input.participants),
+    ...(input.recurrence ? { recurrence: recurrenceData(input.recurrence) } : {}),
     createdBy: actorId,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -82,7 +96,8 @@ export function createEvent(
 }
 
 /**
- * Writes only the changed fields (CAL-06); `description: null` (or empty) removes it. The
+ * Writes only the changed fields (CAL-06); `description: null` (or empty) removes it, and
+ * `recurrence: null` makes a series a one-off event (Phase 7 B10). The
  * rules check the whole resulting event, so a caller must pass participants without former
  * members (`normalizeParticipants`, B5) whenever the stored list may hold one.
  */
@@ -104,6 +119,9 @@ export function updateEvent(
   if (changes.end !== undefined) data.end = Timestamp.fromDate(changes.end);
   if (changes.participants !== undefined) {
     data.participants = participantsData(changes.participants);
+  }
+  if (changes.recurrence !== undefined) {
+    data.recurrence = changes.recurrence ? recurrenceData(changes.recurrence) : deleteField();
   }
   return updateDoc(eventRef(householdId, eventId), data);
 }

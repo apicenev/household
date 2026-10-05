@@ -1,8 +1,12 @@
 import {
   allDayLength,
   dayTime,
+  duringTrip,
   isMultiDayAllDay,
+  nextOccurrences,
   occurrenceDays,
+  occurrencesInRange,
+  seriesBounds,
   spanInfo,
   visibleParticipants,
 } from "../../domain/calendar";
@@ -19,7 +23,14 @@ import {
   formatWeekday,
   fromDateKey,
 } from "../../lib/format";
-import type { EventOccurrence, EventParticipants, Member } from "../../types";
+import { describeRule, describeSeriesEnd } from "../../lib/recurrenceFormat";
+import type {
+  CalendarEvent,
+  EventOccurrence,
+  EventParticipants,
+  Member,
+  WeekStart,
+} from "../../types";
 
 /**
  * The calendar's visible text for an occurrence (`Calendar.dc.html`, `Sheets` → Termin-Detail,
@@ -125,17 +136,39 @@ export function dateLine(occurrence: EventOccurrence, timeZone: string): string 
   return calendarCopy.meta(formatDate(start, timeZone), formatTimeRange(start, end, timeZone));
 }
 
+/** «↻ Alle 2 Wochen» on cards and «Demnächst» rows (Phase 7 B8); `undefined` for one-offs. */
+export function repeatLabel(occurrence: EventOccurrence): string | undefined {
+  const rule = occurrence.event.recurrence;
+  return rule ? describeRule(rule, { short: true }) : undefined;
+}
+
 /**
  * The rule line of an expanded card (`Calendar.dc.html`): «Wiederholt sich nicht ·
  * 19:30–22:30» / «… · Ganztägig»; a multi-day all-day event «Mi., 14. – Mi., 21. Okt. ·
- * 8 Tage · Alle»; a timed one over several days its full range (D55).
+ * 8 Tage · Alle»; a timed one over several days its full range (D55). A series (Phase 7 B8,
+ * also the Termin-Detail's rule block): «Alle 2 Wochen · Samstag · 10:00–12:00 · Alle»,
+ * «… · Ganztägig · Alle», «… · 3 Tage · Alle».
  */
 export function ruleLine(
   occurrence: EventOccurrence,
   timeZone: string,
   members: readonly Member[],
+  weekStartsOn: WeekStart = 1,
 ): string {
   const { event, start, end } = occurrence;
+  if (event.recurrence) {
+    let when = formatTimeRange(start, end, timeZone);
+    if (event.allDay) {
+      when = isMultiDayAllDay(occurrence)
+        ? calendarCopy.days(allDayLength(occurrence))
+        : terms.allDay;
+    }
+    return calendarCopy.meta(
+      describeRule(event.recurrence, { weekStartsOn }),
+      when,
+      participantNames(event.participants, members),
+    );
+  }
   if (isMultiDayAllDay(occurrence)) {
     return calendarCopy.meta(
       dateLine(occurrence, timeZone),
@@ -179,5 +212,70 @@ export function upcomingHeader(
     relative: days === 0 ? terms.today : days === 1 ? terms.tomorrow : weekdayOfKey(dayKey),
     date: formatDayMonth(fromDateKey(dayKey), "UTC"),
     isToday: days === 0,
+  };
+}
+
+/** One row of «Nächste Termine» (D64, D65). */
+export interface NextDate {
+  key: string;
+  /** «Sa., 17. Okt.» */
+  date: string;
+  /** «10:00–12:00», «Ganztägig» or «3 Tage». */
+  time: string;
+  duringTrip: boolean;
+}
+
+export interface SeriesDetail {
+  /** «Alle 2 Wochen · Samstag · 10:00–12:00 · Alle» */
+  rule: string;
+  /** «Seit Sa., 19. Sept. · endet nie» / «Endete am …» (D63); missing without occurrences. */
+  since?: string;
+  next: NextDate[];
+}
+
+/** «Nächste Termine» shows this many occurrences after the opened one (D64). */
+export const NEXT_DATES = 3;
+
+/**
+ * The Termin-Detail's rule block and «Nächste Termine» for an occurrence of a series (Phase 7
+ * D63–D65); `null` for one-off events. «Während Ferien» compares against `events`' trips.
+ */
+export function seriesDetail(
+  occurrence: EventOccurrence,
+  events: readonly CalendarEvent[],
+  timeZone: string,
+  weekStartsOn: WeekStart,
+  todayKey: string,
+  members: readonly Member[],
+): SeriesDetail | null {
+  const { event } = occurrence;
+  if (!event.recurrence) return null;
+  const bounds = seriesBounds(event, timeZone, weekStartsOn);
+  const next = nextOccurrences(event, occurrence.date, NEXT_DATES, timeZone, weekStartsOn);
+  const trips =
+    next.length === 0
+      ? []
+      : occurrencesInRange(
+          events.filter((candidate) => candidate.category === "travel"),
+          next[0].date,
+          next[next.length - 1].date,
+          timeZone,
+          weekStartsOn,
+        );
+  return {
+    rule: ruleLine(occurrence, timeZone, members, weekStartsOn),
+    since: bounds ? describeSeriesEnd(event.recurrence, bounds, todayKey) : undefined,
+    next: next.map((item) => ({
+      key: item.key,
+      date: item.event.allDay
+        ? formatDate(fromDateKey(item.date), "UTC")
+        : formatDate(item.start, timeZone),
+      time: !item.event.allDay
+        ? formatTimeRange(item.start, item.end, timeZone)
+        : isMultiDayAllDay(item)
+          ? calendarCopy.days(allDayLength(item))
+          : terms.allDay,
+      duringTrip: duringTrip(item, trips),
+    })),
   };
 }

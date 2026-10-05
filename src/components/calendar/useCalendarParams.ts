@@ -10,7 +10,8 @@ import {
 
 /**
  * The calendar's state in the URL (Phase 6 B8): `?month=2026-10&day=2026-10-14&view=upcoming
- * &event={id}`. The day follows the month: a `day` outside the shown month falls back to today
+ * &event={key}`, where the key is an occurrence's: the event id, or «{id}@{date}» for one occurrence of
+ * a series (Phase 7 B9). The day follows the month: a `day` outside the shown month falls back to today
  * (current month) or the 1st. Month, day and tab changes replace the history entry; opening
  * an event on a phone pushes one, so the back gesture closes the detail. On desktop `event`
  * is the expanded card of the selected day (replace, no history entry); moving to another
@@ -71,8 +72,8 @@ export function useCalendarParams(todayKey: string) {
     [update],
   );
 
-  /** Phones: opens the Termin-Detail (D45) with a history entry. */
-  const openEvent = useCallback((id: string) => update({ event: id }, true), [update]);
+  /** Phones: opens the Termin-Detail of an occurrence (D45) with a history entry. */
+  const openEvent = useCallback((key: string) => update({ event: key }, true), [update]);
 
   /** Desktop: selects an event's day with its card expanded (B8, B9). */
   const showEventDay = useCallback(

@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { allDayToStored, zonedToInstant } from "../../domain/eventTime";
+import { eventPickerFromRule, type EventPickerState } from "../../domain/recurrence";
 import type { CalendarEvent, Member } from "../../types";
 import {
   eventChanges,
   eventInput,
+  formRule,
   initialEventFormValues,
+  snappedValues,
   toggleParticipant,
   validateEventForm,
   withAllDay,
@@ -56,6 +59,7 @@ const values = (overrides: Partial<EventFormValues> = {}): EventFormValues => ({
   endKey: "2026-10-02",
   endTime: "22:30",
   participants: "household",
+  repeat: eventPickerFromRule(undefined, overrides.startKey ?? "2026-10-02"),
   ...overrides,
 });
 
@@ -71,6 +75,15 @@ describe("initial values (B6)", () => {
       endKey: "2026-09-30",
       endTime: "16:00",
       participants: "household",
+      repeat: {
+        freq: "none",
+        n: 2,
+        weekdays: [3],
+        monthlyMode: "day",
+        end: "never",
+        until: "2026-12-31",
+        count: 10,
+      },
     });
   });
 
@@ -278,5 +291,148 @@ describe("what gets saved", () => {
       start: new Date("2026-10-02T00:00:00Z"),
       end: new Date("2026-10-02T00:00:00Z"),
     });
+  });
+});
+
+describe("«Wiederholen» (Phase 7 B3, B10, D66)", () => {
+  const everyOtherSat = { freq: "weekly" as const, interval: 2, byWeekday: [6] };
+  const repeat = (patch: Partial<EventPickerState>, startKey = "2026-10-03") => ({
+    ...eventPickerFromRule(undefined, startKey),
+    ...patch,
+  });
+  const cleaning = (overrides: Partial<EventFormValues> = {}) =>
+    values({
+      title: "Grossputz",
+      startKey: "2026-10-03",
+      endKey: "2026-10-03",
+      startTime: "10:00",
+      endTime: "12:00",
+      repeat: repeat({ freq: "nweeks", n: 2, weekdays: [6] }),
+      ...overrides,
+    });
+
+  it("reads a stored rule into the picker", () => {
+    const series = event({
+      start: zonedToInstant("2026-09-19", "10:00", ZURICH),
+      end: zonedToInstant("2026-09-19", "12:00", ZURICH),
+      recurrence: { ...everyOtherSat, count: 4 },
+    });
+    expect(initialEventFormValues(series, {}, ctx).repeat).toMatchObject({
+      freq: "nweeks",
+      n: 2,
+      weekdays: [6],
+      end: "after",
+      count: 4,
+    });
+  });
+
+  it("builds the rule from the start day; monthly and yearly follow it", () => {
+    expect(formRule(cleaning())).toEqual(everyOtherSat);
+    expect(formRule(values())).toBeNull();
+    const monthly = cleaning({ repeat: repeat({ freq: "monthly", monthlyMode: "weekday" }) });
+    expect(formRule(monthly)).toEqual({
+      freq: "monthly",
+      interval: 1,
+      byWeekday: [6],
+      bySetPos: 1,
+    });
+    // B10: a new start re-derives weekday and position (31 Oct = the last Saturday).
+    const moved = withStart(monthly, { key: "2026-10-31" }, ZURICH);
+    expect(formRule(moved)).toMatchObject({ byWeekday: [6], bySetPos: -1 });
+    const yearly = withStart(
+      cleaning({ repeat: repeat({ freq: "yearly" }) }),
+      { key: "2027-02-28" },
+      ZURICH,
+    );
+    expect(formRule(yearly)).toEqual({ freq: "yearly", interval: 1, byMonth: 2, byMonthDay: 28 });
+  });
+
+  it("moves an off-schedule start to the first occurrence on save (B3)", () => {
+    // Thu 1 Oct with «Jeden Samstag» → Sat 3 Oct, same times; a two-day event keeps its length.
+    const thursday = cleaning({
+      startKey: "2026-10-01",
+      endKey: "2026-10-02",
+      repeat: repeat({ freq: "weekly", weekdays: [6] }, "2026-10-01"),
+    });
+    expect(snappedValues(thursday, 1)).toMatchObject({
+      startKey: "2026-10-03",
+      endKey: "2026-10-04",
+      startTime: "10:00",
+      endTime: "12:00",
+    });
+    const input = eventInput(thursday, ZURICH, members, 1);
+    expect(input.start).toEqual(zonedToInstant("2026-10-03", "10:00", ZURICH));
+    expect(input.end).toEqual(zonedToInstant("2026-10-04", "12:00", ZURICH));
+    expect(input.recurrence).toEqual({ freq: "weekly", interval: 1, byWeekday: [6] });
+    // On schedule (or no rule): unchanged.
+    expect(snappedValues(cleaning(), 1)).toEqual(cleaning());
+    expect(snappedValues(values(), 1)).toEqual(values());
+    expect(eventInput(values(), ZURICH, members)).not.toHaveProperty("recurrence");
+  });
+
+  it("rejects «Endet am» before the first occurrence (D66)", () => {
+    const until = (key: string, startKey = "2026-10-03") =>
+      validateEventForm(
+        cleaning({
+          startKey,
+          endKey: startKey,
+          repeat: repeat({ freq: "weekly", weekdays: [6], end: "date", until: key }, startKey),
+        }),
+        ZURICH,
+        1,
+      ).until;
+    expect(until("2026-10-03")).toBeUndefined();
+    expect(until("2026-10-02")).toBe("untilBeforeStart");
+    // Thu start, Sat rule: until Friday is after the start but before the first occurrence.
+    expect(until("2026-10-02", "2026-10-01")).toBe("untilBeforeStart");
+    expect(until("2026-10-03", "2026-10-01")).toBeUndefined();
+    // «Nie» and «Nach N Mal» ignore the kept date.
+    expect(
+      validateEventForm(
+        cleaning({ repeat: repeat({ freq: "daily", until: "2020-01-01" }) }),
+        ZURICH,
+      ).until,
+    ).toBeUndefined();
+  });
+
+  it("sends a changed rule, an end-only change, or «Nie» as null (B10)", () => {
+    const original = event({
+      start: zonedToInstant("2026-10-03", "10:00", ZURICH),
+      end: zonedToInstant("2026-10-03", "12:00", ZURICH),
+      recurrence: everyOtherSat,
+    });
+    const loaded = initialEventFormValues(original, {}, ctx);
+    expect(eventChanges(original, loaded, ZURICH, members, 1)).toEqual({});
+    expect(
+      eventChanges(
+        original,
+        { ...loaded, repeat: { ...loaded.repeat, end: "after", count: 5 } },
+        ZURICH,
+        members,
+        1,
+      ),
+    ).toEqual({ recurrence: { ...everyOtherSat, count: 5 } });
+    expect(
+      eventChanges(
+        original,
+        { ...loaded, repeat: { ...loaded.repeat, freq: "none" } },
+        ZURICH,
+        members,
+        1,
+      ),
+    ).toEqual({ recurrence: null });
+    const oneOff = event();
+    expect(
+      eventChanges(
+        oneOff,
+        {
+          ...initialEventFormValues(oneOff, {}, ctx),
+          repeat: repeat({ freq: "daily" }, "2026-10-02"),
+        },
+        ZURICH,
+        members,
+        1,
+      ),
+    ).toEqual({ recurrence: { freq: "daily", interval: 1 } });
   });
 });

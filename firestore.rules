@@ -13,8 +13,7 @@ rules_version = '2';
 //   households/{hid}/tasks             members CRUD, validated                (Phases 3, 4)
 //   households/{hid}/shoppingItems     members CRUD, validated                (Phase 5)
 //   households/{hid}/itemStats         members create / count ±1, no delete   (Phase 5)
-//   households/{hid}/events            members CRUD, validated                (Phase 6;
-//                                      recurrence: Phase 7)
+//   households/{hid}/events            members CRUD, validated                (Phases 6, 7)
 //   households/{hid}/activity          members create, append-only            (Phase 2)
 //   invites/{code}                     get by signed-in users                 (Phase 2)
 //
@@ -300,6 +299,69 @@ service cloud.firestore {
         allow delete: if false;
       }
 
+      // Recurrence rules, shared by tasks (Phase 4 B2, B3; mirrors validateRule in
+      // src/domain/recurrence.ts) and events (Phase 7 B1; mirrors validateEventRule).
+      // Weekdays 0 = Sunday … 6 = Saturday; monthly and yearly only with interval 1.
+      function validMonthDay(value) {
+        return value is int && value >= 1 && value <= 31;
+      }
+
+      function validWeekdays(value) {
+        return value is list
+          && value.size() >= 1 && value.size() <= 7
+          && value.hasOnly([0, 1, 2, 3, 4, 5, 6])
+          && value.toSet().size() == value.size();
+      }
+
+      // The task shapes; `extraKeys` lets events add their end keys (until, count).
+      function validRuleShape(rule, extraKeys) {
+        return rule is map
+          && rule.keys().hasAll(['freq', 'interval'])
+          && rule.interval is int && rule.interval >= 1 && rule.interval <= 52
+          && ((rule.freq == 'daily'
+              && rule.keys().hasOnly(['freq', 'interval'].concat(extraKeys)))
+            || (rule.freq == 'weekly'
+              && rule.keys().hasOnly(['freq', 'interval', 'byWeekday'].concat(extraKeys))
+              && validWeekdays(rule.get('byWeekday', null)))
+            || (rule.freq == 'monthly'
+              && rule.keys().hasOnly(['freq', 'interval', 'byMonthDay'].concat(extraKeys))
+              && rule.interval == 1
+              && validMonthDay(rule.get('byMonthDay', null)))
+            || (rule.freq == 'yearly'
+              && rule.keys().hasOnly(['freq', 'interval', 'byMonth', 'byMonthDay']
+                                       .concat(extraKeys))
+              && rule.interval == 1
+              && rule.get('byMonth', null) is int
+              && rule.byMonth >= 1 && rule.byMonth <= 12
+              && validMonthDay(rule.get('byMonthDay', null))));
+      }
+
+      // Tasks: no bySetPos, until or count.
+      function validRecurrence(rule) {
+        return validRuleShape(rule, []);
+      }
+
+      // Events (Phase 7 B1): the task shapes or monthly by weekday («Am 1. Samstag», D60:
+      // one weekday + bySetPos 1–4 / -1, no byMonthDay), each with either `until`
+      // («YYYY-MM-DD», inclusive) or `count` (2–99), never both (B5).
+      function validEventRecurrence(rule) {
+        return rule is map
+          && !rule.keys().hasAll(['until', 'count'])
+          && (!('until' in rule)
+            || (rule.until is string && rule.until.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')))
+          && (!('count' in rule)
+            || (rule.count is int && rule.count >= 2 && rule.count <= 99))
+          && (validRuleShape(rule, ['until', 'count'])
+            || (rule.get('freq', null) == 'monthly'
+              && rule.keys().hasAll(['freq', 'interval', 'byWeekday', 'bySetPos'])
+              && rule.keys().hasOnly(['freq', 'interval', 'byWeekday', 'bySetPos', 'until',
+                                      'count'])
+              && rule.interval == 1
+              && rule.byWeekday is list && rule.byWeekday.size() == 1
+              && rule.byWeekday.hasOnly([0, 1, 2, 3, 4, 5, 6])
+              && rule.bySetPos in [1, 2, 3, 4, -1]));
+      }
+
       // tasks/{taskId} (Phase 3): every member reads and writes every task (requirements §3).
       // A write either edits fields, completes (open → done) or reopens (done → open).
       // Phase 4: recurring tasks carry recurrence, rotation, seriesId and seriesIndex.
@@ -327,40 +389,6 @@ service cloud.firestore {
         function validAssignee(value) {
           return value == null
             || (value is string && value in get(householdPath(hid)).data.memberIds);
-        }
-
-        // Recurrence rule (Phase 4 B2, B3; mirrors validateRule in src/domain/recurrence.ts).
-        // Weekdays 0 = Sunday … 6 = Saturday; monthly and yearly only with interval 1.
-        function validMonthDay(value) {
-          return value is int && value >= 1 && value <= 31;
-        }
-
-        function validWeekdays(value) {
-          return value is list
-            && value.size() >= 1 && value.size() <= 7
-            && value.hasOnly([0, 1, 2, 3, 4, 5, 6])
-            && value.toSet().size() == value.size();
-        }
-
-        function validRecurrence(rule) {
-          return rule is map
-            && rule.keys().hasAll(['freq', 'interval'])
-            && rule.interval is int && rule.interval >= 1 && rule.interval <= 52
-            && ((rule.freq == 'daily'
-                && rule.keys().hasOnly(['freq', 'interval']))
-              || (rule.freq == 'weekly'
-                && rule.keys().hasOnly(['freq', 'interval', 'byWeekday'])
-                && validWeekdays(rule.get('byWeekday', null)))
-              || (rule.freq == 'monthly'
-                && rule.keys().hasOnly(['freq', 'interval', 'byMonthDay'])
-                && rule.interval == 1
-                && validMonthDay(rule.get('byMonthDay', null)))
-              || (rule.freq == 'yearly'
-                && rule.keys().hasOnly(['freq', 'interval', 'byMonth', 'byMonthDay'])
-                && rule.interval == 1
-                && rule.get('byMonth', null) is int
-                && rule.byMonth >= 1 && rule.byMonth <= 12
-                && validMonthDay(rule.get('byMonthDay', null))));
         }
 
         // Rotation (RTK-05, Phase 4 B4): current members, no duplicates, and the assignee is
@@ -613,7 +641,8 @@ service cloud.firestore {
       // events/{eventId} (Phase 6 B1–B3, B5, B13): any member creates, edits and deletes.
       // Every write is checked as a whole event, so an edit that still lists a former member
       // is rejected (the client drops them, B5). Timed events store instants; all-day events
-      // floating dates at 00:00 UTC with an inclusive end (B2). Recurrence arrives in Phase 7.
+      // floating dates at 00:00 UTC with an inclusive end (B2). A recurring event (Phase 7)
+      // stores its first occurrence and a rule (validEventRecurrence); `exceptions` stays out.
       match /events/{eventId} {
         function validEventTitle(value) {
           return value is string && value.size() >= 1 && value.size() <= 200
@@ -649,8 +678,8 @@ service cloud.firestore {
 
         function validEventData(data) {
           return data.keys().hasOnly(['title', 'description', 'category', 'allDay', 'start',
-                                      'end', 'participants', 'createdBy', 'createdAt',
-                                      'updatedAt'])
+                                      'end', 'participants', 'recurrence', 'createdBy',
+                                      'createdAt', 'updatedAt'])
             && data.keys().hasAll(['title', 'category', 'allDay', 'start', 'end',
                                    'participants', 'createdBy', 'createdAt', 'updatedAt'])
             && validEventTitle(data.title)
@@ -661,6 +690,7 @@ service cloud.firestore {
             && data.allDay is bool
             && validEventTimes(data)
             && validParticipants(data.participants)
+            && (!('recurrence' in data) || validEventRecurrence(data.recurrence))
             && data.updatedAt == request.time;
         }
 

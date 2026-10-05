@@ -4,27 +4,45 @@ import {
   dateKey,
   daysBetweenKeys,
   daysInMonth,
+  isDateKey,
   keyParts,
   startOfWeekKey,
   weekdayOfKey,
 } from "./dateKeys";
 
 /**
- * Recurrence engine (RTK-01…03, business rule §8.2), shared with recurring events (Phase 7).
- * Pure, on calendar date keys («2026-10-03»), so DST can't move a date.
+ * Recurrence engine (RTK-01…03, business rule §8.2), shared by recurring tasks (Phase 4) and
+ * recurring events (Phase 7: REV-01…05, §8.6). Pure, on calendar date keys («2026-10-03»),
+ * so DST can't move a date.
  *
- * The schedule is anchored at a date (for tasks: the current occurrence's due date, Phase 4
- * B1): «every N days» counts days from the anchor, «every N weeks» counts weeks from the
- * anchor's week (household week start), monthly / yearly count months / years from it.
+ * The schedule is anchored at a date (tasks: the current occurrence's due date, Phase 4 B1;
+ * events: the first occurrence, Phase 7 B3): «every N days» counts days from the anchor,
+ * «every N weeks» counts weeks from the anchor's week (household week start), monthly /
+ * yearly count months / years from it. Nothing before the anchor is ever on the schedule.
  */
 
 export const MIN_INTERVAL = 1;
 export const MAX_INTERVAL = 52;
 
+/** «Nach N Mal» (Phase 7 B5): 2–99, the stepper starts at 10 (`RecurrencePicker.dc.html`). */
+export const MIN_COUNT = 2;
+export const MAX_COUNT = 99;
+export const DEFAULT_COUNT = 10;
+
+/** Monthly by weekday (D60): «1. … 4. Samstag» and «letzter Samstag». */
+export const SET_POSITIONS: readonly number[] = [1, 2, 3, 4, -1];
+
+/** At most this many occurrences per event and expansion (§8.6, Phase 7 B6). */
+export const MAX_OCCURRENCES = 500;
+
 /** Safety cap for the day-by-day search (a valid rule always matches far earlier). */
 const MAX_STEPS = 1000;
 
-export type RuleProblem = "interval" | "weekdays" | "monthDay" | "month" | "keys";
+/** Every valid rule has an occurrence in any window of this many days after its anchor. */
+const LONGEST_GAP_DAYS = 367;
+
+export type RuleProblem =
+  "interval" | "weekdays" | "monthDay" | "month" | "keys" | "setPos" | "until" | "count" | "end";
 
 const allowedKeys: Record<RecurrenceRule["freq"], readonly string[]> = {
   daily: ["freq", "interval"],
@@ -37,7 +55,10 @@ function isIntIn(value: unknown, min: number, max: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= min && value <= max;
 }
 
-/** Whether a rule is complete and consistent (the same checks as `firestore.rules`). */
+/**
+ * Whether a task rule is complete and consistent (the same checks as `firestore.rules`).
+ * Rejects the events-only `bySetPos`, `until` and `count` («keys»).
+ */
 export function validateRule(
   rule: RecurrenceRule,
 ): { ok: true } | { ok: false; problem: RuleProblem } {
@@ -70,14 +91,66 @@ export function validateRule(
   }
 }
 
+/**
+ * Whether an event rule is complete and consistent (Phase 7 B1, mirrored by
+ * `validEventRecurrence` in `firestore.rules`): the task shapes, plus monthly by weekday
+ * (`byWeekday: [d]` + `bySetPos`, no `byMonthDay`) and either `until` or `count`.
+ */
+export function validateEventRule(
+  rule: RecurrenceRule,
+): { ok: true } | { ok: false; problem: RuleProblem } {
+  const { until, count, ...core } = rule;
+  if (until !== undefined && count !== undefined) return { ok: false, problem: "end" };
+  if (until !== undefined && !isDateKey(until)) return { ok: false, problem: "until" };
+  if (count !== undefined && !isIntIn(count, MIN_COUNT, MAX_COUNT)) {
+    return { ok: false, problem: "count" };
+  }
+  if (core.freq !== "monthly" || core.bySetPos === undefined) return validateRule(core);
+  const keys = Object.keys(core).filter((key) => core[key as keyof typeof core] !== undefined);
+  if (!keys.every((key) => ["freq", "interval", "byWeekday", "bySetPos"].includes(key))) {
+    return { ok: false, problem: "keys" };
+  }
+  if (core.interval !== 1) return { ok: false, problem: "interval" };
+  const days = core.byWeekday ?? [];
+  if (days.length !== 1 || !isIntIn(days[0], 0, 6)) return { ok: false, problem: "weekdays" };
+  if (!SET_POSITIONS.includes(core.bySetPos)) return { ok: false, problem: "setPos" };
+  return { ok: true };
+}
+
 /** Day `byMonthDay` of a month, clamped to its last day (31 → 30 Apr / 28 Feb, REV-05). */
 function clampedDay(year: number, month: number, byMonthDay: number): string {
   return dateKey(year, month, Math.min(byMonthDay, daysInMonth(year, month)));
 }
 
+/** The `position`-th `weekday` of a month (1–4), or the last one (−1). */
+export function nthWeekdayOfMonth(
+  year: number,
+  month: number,
+  weekday: number,
+  position: number,
+): string {
+  if (position < 0) {
+    const last = daysInMonth(year, month);
+    const back = (weekdayOfKey(dateKey(year, month, last)) - weekday + 7) % 7;
+    return dateKey(year, month, last - back);
+  }
+  const ahead = (weekday - weekdayOfKey(dateKey(year, month, 1)) + 7) % 7;
+  return dateKey(year, month, 1 + ahead + (position - 1) * 7);
+}
+
+/**
+ * The position of a date's weekday in its month (D60): days 1–7 → 1 … 22–28 → 4; the 5th
+ * one (29–31) is «der letzte» (−1).
+ */
+export function setPosOf(key: string): number {
+  const position = Math.ceil(keyParts(key).day / 7);
+  return position === 5 ? -1 : position;
+}
+
 /**
  * The first date on the schedule strictly after `after`. Dates before the anchor are never
- * returned (the anchor's week / month / year is the first one of the schedule).
+ * returned (the anchor's week / month / year is the first one of the schedule). Ignores
+ * `until` / `count`; `occurrenceDates` applies them.
  */
 export function nextOccurrence(
   rule: RecurrenceRule,
@@ -95,7 +168,9 @@ export function nextOccurrence(
       const days = new Set(rule.byWeekday ?? []);
       const anchorWeek = startOfWeekKey(anchor, weekStartsOn);
       let candidate = addDaysToKey(after, 1);
-      if (candidate < anchorWeek) candidate = anchorWeek;
+      // The anchor, not its week start: earlier days of the anchor's week aren't on the
+      // schedule (Phase 7 review: Thu anchor, «Di, Sa» must not return the Tuesday before).
+      if (candidate < anchor) candidate = anchor;
       for (let step = 0; step < MAX_STEPS; step++) {
         const weeks = daysBetweenKeys(anchorWeek, startOfWeekKey(candidate, weekStartsOn)) / 7;
         if (weeks % rule.interval !== 0) {
@@ -116,11 +191,17 @@ export function nextOccurrence(
       for (let step = 0; step < MAX_STEPS; step++, months++) {
         if (months < 0 || months % rule.interval !== 0) continue;
         const total = start.month - 1 + months;
-        const candidate = clampedDay(
-          start.year + Math.floor(total / 12),
-          (total % 12) + 1,
-          rule.byMonthDay ?? start.day,
-        );
+        const year = start.year + Math.floor(total / 12);
+        const month = (total % 12) + 1;
+        const candidate =
+          rule.bySetPos === undefined
+            ? clampedDay(year, month, rule.byMonthDay ?? start.day)
+            : nthWeekdayOfMonth(
+                year,
+                month,
+                rule.byWeekday?.[0] ?? weekdayOfKey(anchor),
+                rule.bySetPos,
+              );
         if (candidate > after && candidate >= anchor) return candidate;
       }
       break;
@@ -174,6 +255,80 @@ export function firstDueOnOrAfter(
   weekStartsOn: WeekStart,
 ): string {
   return nextOccurrence(rule, addDaysToKey(today, -1), today, weekStartsOn);
+}
+
+/**
+ * The first schedule date on or after `startKey`, anchored there (Phase 7 B3): an event's
+ * start is moved to it on save, so the stored start is always the first occurrence.
+ */
+export function snapToSchedule(
+  rule: RecurrenceRule,
+  startKey: string,
+  weekStartsOn: WeekStart,
+): string {
+  return nextOccurrence(rule, addDaysToKey(startKey, -1), startKey, weekStartsOn);
+}
+
+/** The last date `until` / `count` allow (inclusive), or `null` for a series without end. */
+function endBound(rule: RecurrenceRule, anchor: string, weekStartsOn: WeekStart): string | null {
+  if (rule.until !== undefined) return rule.until;
+  if (rule.count === undefined) return null;
+  let key = snapToSchedule(rule, anchor, weekStartsOn);
+  for (let n = 1; n < rule.count; n++) key = nextOccurrence(rule, key, anchor, weekStartsOn);
+  return key;
+}
+
+/**
+ * The occurrence dates within `firstKey` … `lastKey` (inclusive), honouring `until` and
+ * `count` (B5), at most `cap` of them (§8.6). Jumps straight to the range (B6), so an old
+ * series costs the same as a new one.
+ */
+export function occurrenceDates(
+  rule: RecurrenceRule,
+  anchor: string,
+  firstKey: string,
+  lastKey: string,
+  weekStartsOn: WeekStart,
+  cap = MAX_OCCURRENCES,
+): string[] {
+  const bound = endBound(rule, anchor, weekStartsOn);
+  const stop = bound !== null && bound < lastKey ? bound : lastKey;
+  const from = firstKey > anchor ? firstKey : anchor;
+  const dates: string[] = [];
+  if (from > stop) return dates;
+  let key = nextOccurrence(rule, addDaysToKey(from, -1), anchor, weekStartsOn);
+  while (key <= stop && dates.length < cap) {
+    dates.push(key);
+    key = nextOccurrence(rule, key, anchor, weekStartsOn);
+  }
+  return dates;
+}
+
+/**
+ * First and last occurrence of a series anchored at `anchor` (D63); `last` is `null` when it
+ * never ends. `null` for a series without any occurrence (an `until` before the first match,
+ * which the form prevents, D66).
+ */
+export function seriesRange(
+  rule: RecurrenceRule,
+  anchor: string,
+  weekStartsOn: WeekStart,
+): { first: string; last: string | null } | null {
+  const first = snapToSchedule(rule, anchor, weekStartsOn);
+  if (rule.until !== undefined) {
+    if (rule.until < first) return null;
+    // A valid rule matches within any LONGEST_GAP_DAYS window, so the last one is in there.
+    const tail = occurrenceDates(
+      rule,
+      anchor,
+      addDaysToKey(rule.until, -LONGEST_GAP_DAYS),
+      rule.until,
+      weekStartsOn,
+      LONGEST_GAP_DAYS + 1,
+    );
+    return { first, last: tail[tail.length - 1] ?? first };
+  }
+  return { first, last: endBound(rule, anchor, weekStartsOn) };
 }
 
 /** The chips of the RecurrencePicker that tasks offer (Phase 4 B2). */
@@ -265,7 +420,19 @@ export function withDueDate(rule: RecurrenceRule, newDueDate: string): Recurrenc
   return rule;
 }
 
-/** Same schedule (weekday order doesn't matter). */
+/**
+ * An event rule after its start moved to `startKey` (Phase 7 B10): monthly by day / yearly as
+ * `withDueDate`, monthly by weekday takes the new weekday and position (D60) and never gets a
+ * `byMonthDay` next to its `bySetPos`. `until` / `count` stay.
+ */
+export function withStartDate(rule: RecurrenceRule, startKey: string): RecurrenceRule {
+  if (rule.freq === "monthly" && rule.bySetPos !== undefined) {
+    return { ...rule, byWeekday: [weekdayOfKey(startKey)], bySetPos: setPosOf(startKey) };
+  }
+  return withDueDate(rule, startKey);
+}
+
+/** Same schedule and end (weekday order doesn't matter). */
 export function sameRule(a: RecurrenceRule | undefined, b: RecurrenceRule | undefined): boolean {
   if (a === undefined || b === undefined) return a === b;
   const days = (rule: RecurrenceRule) =>
@@ -275,7 +442,10 @@ export function sameRule(a: RecurrenceRule | undefined, b: RecurrenceRule | unde
     a.interval === b.interval &&
     days(a) === days(b) &&
     a.byMonthDay === b.byMonthDay &&
-    a.byMonth === b.byMonth
+    a.byMonth === b.byMonth &&
+    a.bySetPos === b.bySetPos &&
+    a.until === b.until &&
+    a.count === b.count
   );
 }
 
@@ -295,5 +465,72 @@ export function ruleForSave(
   if (rule.freq === "monthly") return { ...rule, byMonthDay: before.byMonthDay };
   if (rule.freq === "yearly")
     return { ...rule, byMonth: before.byMonth, byMonthDay: before.byMonthDay };
+  return rule;
+}
+
+/** Monthly segment of the event picker (`RecurrencePicker.dc.html`): «Am 3.» / «Am 1. Samstag». */
+export type MonthlyMode = "day" | "weekday";
+
+/** «Endet»: «Nie» / «Am Datum» / «Nach N Mal» (REV-02). */
+export type PickerEnd = "never" | "date" | "after";
+
+/** The event picker (Phase 7 B2): the task chips plus the monthly segment and «Endet». */
+export interface EventPickerState extends PickerState {
+  monthlyMode: MonthlyMode;
+  end: PickerEnd;
+  /** For «Am Datum»; kept while another end is picked. */
+  until: string;
+  /** For «Nach N Mal» (2–99). */
+  count: number;
+}
+
+/** «Am Datum» default (D59): the last day of the third month after the start. */
+export function defaultUntil(startKey: string): string {
+  const { year, month } = keyParts(startKey);
+  const total = month - 1 + 3;
+  const endYear = year + Math.floor(total / 12);
+  const endMonth = (total % 12) + 1;
+  return dateKey(endYear, endMonth, daysInMonth(endYear, endMonth));
+}
+
+/** Event picker state for a stored rule (or none), anchored at the event's start. */
+export function eventPickerFromRule(
+  rule: RecurrenceRule | undefined,
+  startKey: string,
+): EventPickerState {
+  let end: PickerEnd = "never";
+  if (rule?.until !== undefined) end = "date";
+  else if (rule?.count !== undefined) end = "after";
+  return {
+    ...pickerFromRule(rule, startKey),
+    monthlyMode: rule?.bySetPos !== undefined ? "weekday" : "day",
+    end,
+    until: rule?.until ?? defaultUntil(startKey),
+    count: rule?.count ?? DEFAULT_COUNT,
+  };
+}
+
+/**
+ * The event rule a picker state stands for; `null` for «Nie». Monthly / yearly take day,
+ * weekday position and month from the start (B3, D60), so the start is always on the schedule.
+ */
+export function eventRuleFromPicker(
+  state: EventPickerState,
+  startKey: string,
+): RecurrenceRule | null {
+  let rule = ruleFromPicker(state, startKey);
+  if (!rule) return null;
+  if (rule.freq === "monthly" && state.monthlyMode === "weekday") {
+    rule = {
+      freq: "monthly",
+      interval: 1,
+      byWeekday: [weekdayOfKey(startKey)],
+      bySetPos: setPosOf(startKey),
+    };
+  }
+  if (state.end === "date") return { ...rule, until: state.until };
+  if (state.end === "after") {
+    return { ...rule, count: Math.min(MAX_COUNT, Math.max(MIN_COUNT, state.count)) };
+  }
   return rule;
 }

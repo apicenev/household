@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { singleOccurrence } from "../../domain/calendar";
 import { allDayToStored, zonedToInstant } from "../../domain/eventTime";
 import type { CalendarEvent, EventOccurrence, Member } from "../../types";
 import {
   dateLine,
   dayCellLabel,
   participantNames,
+  repeatLabel,
   ruleLine,
+  seriesDetail,
   selectedDayTitle,
   spanLabel,
   timeColumn,
@@ -32,7 +35,7 @@ function occ(overrides: Partial<CalendarEvent>): EventOccurrence {
     hasPendingWrites: false,
     ...overrides,
   };
-  return { key: event.id, event, start: event.start, end: event.end };
+  return singleOccurrence(event, "Europe/Zurich");
 }
 
 const member = (uid: string, displayName: string): Member => ({
@@ -137,5 +140,75 @@ describe("day headers", () => {
       relative: "Mi.",
       date: "14. Okt.",
     });
+  });
+});
+
+describe("series labels (Phase 7 B8, D63–D65)", () => {
+  const everyOtherSat = { freq: "weekly" as const, interval: 2, byWeekday: [6] };
+  const cleaning = occ({
+    start: zonedToInstant("2026-09-19", "10:00", ZURICH),
+    end: zonedToInstant("2026-09-19", "12:00", ZURICH),
+    recurrence: everyOtherSat,
+  });
+  const weekend = occ({
+    allDay: true,
+    ...allDayToStored("2026-10-02", "2026-10-04"),
+    participants: ["anna"],
+    recurrence: { freq: "weekly", interval: 1, byWeekday: [5], count: 3 },
+  });
+
+  it("labels cards with the short rule", () => {
+    expect(repeatLabel(cleaning)).toBe("Alle 2 Wochen");
+    expect(repeatLabel(weekend)).toBe("Wöchentlich");
+    expect(repeatLabel(dinner)).toBeUndefined();
+  });
+
+  it("writes the rule line with time, «Ganztägig» or the length, and participants", () => {
+    expect(ruleLine(cleaning, ZURICH, members)).toBe(
+      "Alle 2 Wochen · Samstag · 10:00–12:00 · Alle",
+    );
+    expect(ruleLine(weekend, ZURICH, members)).toBe("Jeden Freitag · 3 Tage · Anna");
+    const rent = occ({
+      allDay: true,
+      ...allDayToStored("2026-10-01", "2026-10-01"),
+      recurrence: { freq: "monthly", interval: 1, byMonthDay: 1 },
+    });
+    expect(ruleLine(rent, ZURICH, members)).toBe("Monatlich am 1. · Ganztägig · Alle");
+    const twoDays = occ({ recurrence: { freq: "weekly", interval: 1, byWeekday: [0, 1] } });
+    expect(ruleLine(twoDays, ZURICH, members, 0)).toBe(
+      "Wöchentlich am Sonntag, Montag · 19:30–22:30 · Alle",
+    );
+    expect(ruleLine(twoDays, ZURICH, members, 1)).toBe(
+      "Wöchentlich am Montag, Sonntag · 19:30–22:30 · Alle",
+    );
+  });
+
+  it("builds the detail's rule block and next dates", () => {
+    const trip = occ({
+      id: "trip",
+      category: "travel",
+      allDay: true,
+      ...allDayToStored("2026-10-14", "2026-10-21"),
+    }).event;
+    expect(
+      seriesDetail(cleaning, [cleaning.event, trip], ZURICH, 1, "2026-09-30", members),
+    ).toEqual({
+      rule: "Alle 2 Wochen · Samstag · 10:00–12:00 · Alle",
+      since: "Seit Sa., 19. Sept. · endet nie",
+      next: [
+        { key: "e1@2026-10-03", date: "Sa., 3. Okt.", time: "10:00–12:00", duringTrip: false },
+        { key: "e1@2026-10-17", date: "Sa., 17. Okt.", time: "10:00–12:00", duringTrip: true },
+        { key: "e1@2026-10-31", date: "Sa., 31. Okt.", time: "10:00–12:00", duringTrip: false },
+      ],
+    });
+    expect(seriesDetail(weekend, [weekend.event], ZURICH, 1, "2026-09-30", members)).toEqual({
+      rule: "Jeden Freitag · 3 Tage · Anna",
+      since: "Seit Fr., 2. Okt. · endet nach 3 Terminen",
+      next: [
+        { key: "e1@2026-10-09", date: "Fr., 9. Okt.", time: "3 Tage", duringTrip: false },
+        { key: "e1@2026-10-16", date: "Fr., 16. Okt.", time: "3 Tage", duringTrip: false },
+      ],
+    });
+    expect(seriesDetail(dinner, [dinner.event], ZURICH, 1, "2026-09-30", members)).toBeNull();
   });
 });

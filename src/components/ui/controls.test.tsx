@@ -4,7 +4,14 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { DateField } from "./DateField";
 import { DatePill, TimePill } from "./DateTimePill";
+import {
+  eventPickerFromRule,
+  pickerFromRule,
+  type EventPickerState,
+  type PickerState,
+} from "../../domain/recurrence";
 import { FilterChip } from "./FilterChip";
+import { RecurrencePicker } from "./RecurrencePicker";
 import { SegmentedControl } from "./SegmentedControl";
 import { TextField } from "./TextField";
 import { Textarea } from "./Textarea";
@@ -181,5 +188,60 @@ describe("DatePill / TimePill (Phase 6 D48)", () => {
     fireEvent.change(screen.getByLabelText("Beginn, Datum"), { target: { value: "" } });
     expect(screen.getByText("Sa., 3. Okt.")).toBeInTheDocument();
     expect(screen.getByLabelText("Beginn, Uhrzeit")).toHaveAttribute("aria-invalid", "true");
+  });
+});
+
+describe("RecurrencePicker (Phase 4; event mode Phase 7)", () => {
+  function TaskPicker() {
+    const [value, setValue] = useState<PickerState>(() => pickerFromRule(undefined, "2026-10-03"));
+    return (
+      <RecurrencePicker value={value} onChange={setValue} dueDate="2026-10-03" weekStartsOn={1} />
+    );
+  }
+
+  function EventPicker({ start = "2026-10-03" }: { start?: string }) {
+    const [value, setValue] = useState<EventPickerState>(() =>
+      eventPickerFromRule(undefined, start),
+    );
+    return (
+      <RecurrencePicker
+        mode="event"
+        value={value}
+        onChange={setValue}
+        dueDate={start}
+        weekStartsOn={1}
+      />
+    );
+  }
+
+  it("task mode has no monthly segment and no «Endet»", async () => {
+    render(<TaskPicker />);
+    await userEvent.click(screen.getByRole("button", { name: "Monatlich" }));
+    expect(screen.getByText("Monatlich am 3.")).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: "Am 1. Samstag" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: "Endet" })).not.toBeInTheDocument();
+  });
+
+  it("event mode: «Endet» only while repeating; the monthly segment names the 5th as «letzten»", async () => {
+    render(<EventPicker start="2026-10-31" />);
+    expect(screen.queryByRole("radiogroup", { name: "Endet" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Monatlich" }));
+    expect(screen.getByRole("radiogroup", { name: "Endet" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Am letzten Samstag" }));
+    expect(screen.getByText("Monatlich am letzten Samstag")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("radio", { name: "Am 31." }));
+    expect(screen.getByText("Monatlich am 31.")).toBeInTheDocument();
+  });
+
+  it("event mode: the «Nach N Mal» stepper stays within 2–99", async () => {
+    render(<EventPicker />);
+    await userEvent.click(screen.getByRole("button", { name: "Täglich" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Nach N Mal" }));
+    const less = screen.getByRole("button", { name: "Weniger" });
+    for (let i = 0; i < 8; i++) await userEvent.click(less);
+    expect(screen.getByText("Täglich · 2 Mal")).toBeInTheDocument();
+    expect(less).toBeDisabled();
+    await userEvent.click(screen.getByRole("radio", { name: "Nie" }));
+    expect(screen.queryByText("Täglich · 2 Mal")).not.toBeInTheDocument();
   });
 });

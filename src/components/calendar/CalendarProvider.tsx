@@ -5,6 +5,8 @@ import { useAuth } from "../../lib/auth/useAuth";
 import { actions as actionLabels, calendarCopy } from "../../lib/copy";
 import { GENERIC_WRITE_ERROR } from "../../lib/firestoreErrors";
 import { useLoadedHousehold } from "../../lib/household/useHousehold";
+import { eventStartKey } from "../../domain/calendar";
+import { formatDate, fromDateKey } from "../../lib/format";
 import { createEvent, deleteEvent, updateEvent } from "../../services/eventService";
 import type { CalendarEvent } from "../../types";
 import { Button } from "../ui/Button";
@@ -92,7 +94,9 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
           setDeleting(null);
         }}
         title={deleting ? calendarCopy.deleteTitle(deleting.event.title) : ""}
-        text={calendarCopy.deleteText(members.map((member) => member.displayName))}
+        text={(deleting?.event.recurrence
+          ? calendarCopy.deleteSeriesText
+          : calendarCopy.deleteText)(members.map((member) => member.displayName))}
         confirmLabel={actionLabels.delete}
       />
     </CalendarContext.Provider>
@@ -198,28 +202,32 @@ function EventSheet({
     onClose();
   }, [vanished, toast, onClose]);
 
-  const problems = validateEventForm(values, timeZone);
-  // The title error shows after a save attempt; the times error at once (D48).
+  const { weekStartsOn } = household;
+  const problems = validateEventForm(values, timeZone, weekStartsOn);
+  // The title error shows after a save attempt; the times and «Endet am» errors at once (D48,
+  // D66).
   const errors = {
     title: submitted ? problems.title : undefined,
     description: problems.description,
     times: problems.times,
+    until: problems.until,
   };
   const editing = state?.mode === "edit" || (state === null && original !== undefined);
-  const changes = original ? eventChanges(original, values, timeZone, members) : {};
+  const changes = original ? eventChanges(original, values, timeZone, members, weekStartsOn) : {};
   const canSave =
     !problems.times &&
     !problems.description &&
+    !problems.until &&
     values.title.trim() !== "" &&
     (!editing || Object.keys(changes).length > 0);
 
   function submit() {
     setSubmitted(true);
-    if (problems.title || problems.times || problems.description) return;
+    if (problems.title || problems.times || problems.description || problems.until) return;
     if (editing) {
       if (event && original) actions.update(event, changes);
     } else {
-      actions.create(eventInput(values, timeZone, members));
+      actions.create(eventInput(values, timeZone, members, weekStartsOn));
     }
     onClose();
   }
@@ -267,6 +275,12 @@ function EventSheet({
         errors={errors}
         members={members}
         timeZone={timeZone}
+        weekStartsOn={weekStartsOn}
+        seriesSince={
+          original?.recurrence
+            ? formatDate(fromDateKey(eventStartKey(original, timeZone)), "UTC")
+            : undefined
+        }
         focus={options.focus ?? "title"}
         onSubmit={submit}
         onDelete={!desktop && editing && event ? () => onDelete(event) : undefined}

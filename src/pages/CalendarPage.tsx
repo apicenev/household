@@ -6,9 +6,10 @@ import {
   PlusIcon,
   TrashIcon as Trash20,
 } from "@heroicons/react/20/solid";
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useCalendar } from "../components/calendar/calendarContext";
+import { seriesDetail } from "../components/calendar/calendarLabels";
 import { DayPanel } from "../components/calendar/DayPanel";
 import { DesktopEventCard, MobileEventCard } from "../components/calendar/EventCard";
 import { EventDetail } from "../components/calendar/EventDetail";
@@ -26,8 +27,8 @@ import {
   addMonths,
   eventsOnDay,
   monthGrid,
-  occurrenceDays,
   occurrencesInRange,
+  resolveOccurrenceParam,
   upcoming,
   UPCOMING_DAYS,
   type CalendarView,
@@ -48,6 +49,8 @@ const LEGEND = Object.keys(eventCategories) as EventCategory[];
  * the month grid with the selected day below (phones) or in the right column (desktop), and
  * on phones the Termin-Detail behind `?event=` (D45). State lives in the URL (B8). «Neuer
  * Termin» / «Termin hinzufügen», «Bearbeiten» and «Löschen» go through CalendarProvider.
+ * Recurring events (Phase 7) are expanded once per range (memoised); `?event=` holds an
+ * occurrence key, «{id}» or «{id}@{date}» (B9).
  */
 export default function CalendarPage() {
   const { household, members, events, eventsLoading, eventsError, retryEvents } =
@@ -63,17 +66,39 @@ export default function CalendarPage() {
   const navigate = useNavigate();
   useDocumentTitle(areas.calendar);
 
-  const weeks = monthGrid(month, household.weekStartsOn, todayKey);
+  const { weekStartsOn } = household;
+  const weeks = monthGrid(month, weekStartsOn, todayKey);
   const gridFirst = weeks[0][0].key;
   const gridLast = weeks[weeks.length - 1][6].key;
-  const gridOccurrences = occurrencesInRange(events, gridFirst, gridLast, timeZone);
+  const gridOccurrences = useMemo(
+    () => occurrencesInRange(events, gridFirst, gridLast, timeZone, weekStartsOn),
+    [events, gridFirst, gridLast, timeZone, weekStartsOn],
+  );
   const dayOccurrences = eventsOnDay(gridOccurrences, selectedDay, timeZone);
+  const upcomingOccurrences = useMemo(
+    () =>
+      view === "upcoming"
+        ? occurrencesInRange(
+            events,
+            todayKey,
+            addDaysToKey(todayKey, UPCOMING_DAYS - 1),
+            timeZone,
+            weekStartsOn,
+          )
+        : [],
+    [view, events, todayKey, timeZone, weekStartsOn],
+  );
 
   // `?event=`: the event behind it, and whether it was there before (deleted elsewhere, D52).
-  const linked = eventId ? events.find((event) => event.id === eventId) : undefined;
-  const linkedOccurrence: EventOccurrence | null = linked
-    ? { key: linked.id, event: linked, start: linked.start, end: linked.end }
-    : null;
+  const linkedId = eventId ? eventId.split("@")[0] : null;
+  const linked = linkedId ? events.find((event) => event.id === linkedId) : undefined;
+  const linkedOccurrence: EventOccurrence | null = useMemo(
+    () =>
+      eventId && linked
+        ? resolveOccurrenceParam(eventId, events, todayKey, timeZone, weekStartsOn)
+        : null,
+    [eventId, linked, events, todayKey, timeZone, weekStartsOn],
+  );
   const seenId = useRef<string | null>(null);
   const { clearEvent, showEventDay } = params;
   // Desktop: `?event=` is the expanded card (B8); it must be one of the selected day's.
@@ -81,9 +106,9 @@ export default function CalendarPage() {
   const linkedOnSelectedDay = dayOccurrences.some((occurrence) => occurrence.key === eventId);
 
   useEffect(() => {
-    if (!eventId || eventsLoading) return;
-    if (!linked) {
-      if (seenId.current === eventId && !calendar.deletedHere(eventId)) {
+    if (!linkedId || eventsLoading) return;
+    if (!linked || !linkedOccurrence) {
+      if (seenId.current === linkedId && !calendar.deletedHere(linkedId)) {
         toast.show({ message: calendarCopy.deletedElsewhere, tone: "info" });
       }
       seenId.current = null;
@@ -92,18 +117,18 @@ export default function CalendarPage() {
     }
     seenId.current = linked.id;
     if (desktop && !linkedOnSelectedDay) {
-      // A phone link or a resized window: show the event's day with its card open (B8).
-      const occurrence = { key: linked.id, event: linked, start: linked.start, end: linked.end };
-      showEventDay(occurrenceDays(occurrence, timeZone).startKey, linked.id);
+      // A phone link, a resized window or a bare series id: show the occurrence's day with
+      // its card open (B8, Phase 7 B9).
+      showEventDay(linkedOccurrence.date, linkedOccurrence.key);
     }
   }, [
-    eventId,
+    linkedId,
     eventsLoading,
     linked,
+    linkedOccurrence,
     linkedOnSelectedDay,
     calendar,
     desktop,
-    timeZone,
     toast,
     clearEvent,
     showEventDay,
@@ -137,6 +162,10 @@ export default function CalendarPage() {
     return (
       <EventDetail
         occurrence={linkedOccurrence}
+        series={
+          linkedOccurrence &&
+          seriesDetail(linkedOccurrence, events, timeZone, weekStartsOn, todayKey, members)
+        }
         timeZone={timeZone}
         members={members}
         onBack={closeDetail}
@@ -192,20 +221,14 @@ export default function CalendarPage() {
 
   function openOccurrence(occurrence: EventOccurrence, dayKey: string) {
     if (desktop) {
-      showEventDay(dayKey, occurrence.event.id);
+      showEventDay(dayKey, occurrence.key);
     } else {
-      params.openEvent(occurrence.event.id);
+      params.openEvent(occurrence.key);
     }
   }
 
   const upcomingGroups =
-    view === "upcoming"
-      ? upcoming(
-          occurrencesInRange(events, todayKey, addDaysToKey(todayKey, UPCOMING_DAYS - 1), timeZone),
-          new Date(),
-          timeZone,
-        )
-      : [];
+    view === "upcoming" ? upcoming(upcomingOccurrences, new Date(), timeZone) : [];
 
   const tabs = (
     <SegmentedControl<CalendarView>
@@ -253,7 +276,7 @@ export default function CalendarPage() {
       occurrences={gridOccurrences}
       selectedDay={selectedDay}
       todayKey={todayKey}
-      weekStartsOn={household.weekStartsOn}
+      weekStartsOn={weekStartsOn}
       timeZone={timeZone}
       desktop={desktop}
       loading={eventsLoading}
@@ -278,9 +301,10 @@ export default function CalendarPage() {
             dayKey={selectedDay}
             timeZone={timeZone}
             members={members}
+            weekStartsOn={weekStartsOn}
             open={expandedKey === occurrence.key}
             onToggle={() =>
-              params.expandEvent(expandedKey === occurrence.key ? null : occurrence.event.id)
+              params.expandEvent(expandedKey === occurrence.key ? null : occurrence.key)
             }
             actions={
               <>
@@ -310,7 +334,7 @@ export default function CalendarPage() {
             dayKey={selectedDay}
             timeZone={timeZone}
             members={members}
-            onOpen={() => params.openEvent(occurrence.event.id)}
+            onOpen={() => params.openEvent(occurrence.key)}
           />
         )
       }

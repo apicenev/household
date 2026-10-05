@@ -1,3 +1,5 @@
+import type { RecurrenceRule } from "./Recurrence";
+
 /** Event categories (CAL-07), in the order of the legend and the sheet. */
 export type EventCategory = "social" | "appointment" | "travel" | "home" | "reminder" | "other";
 
@@ -24,6 +26,11 @@ export interface CalendarEvent {
   start: Date;
   end: Date;
   participants: EventParticipants;
+  /**
+   * Repeats (Phase 7): `start` / `end` are the first occurrence (B3); the others are expanded
+   * on the client (`occurrencesInRange`) and never stored.
+   */
+  recurrence?: RecurrenceRule;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -40,9 +47,14 @@ export interface NewEventInput {
   start: Date;
   end: Date;
   participants: EventParticipants;
+  /** Phase 7; `start` / `end` must already be the first occurrence (B3). */
+  recurrence?: RecurrenceRule;
 }
 
-/** Fields an edit changes; `description: null` removes the description. */
+/**
+ * Fields an edit changes; `description: null` removes the description, `recurrence: null`
+ * makes the event a one-off (Phase 7 B10).
+ */
 export interface EventChanges {
   title?: string;
   description?: string | null;
@@ -51,16 +63,19 @@ export interface EventChanges {
   start?: Date;
   end?: Date;
   participants?: EventParticipants;
+  recurrence?: RecurrenceRule | null;
 }
 
 /**
- * One appearance of an event in a date range (B11). In Phase 6 every event has exactly one,
- * keyed by the event id; Phase 7 expands recurring events into one per date
- * («{eventId}@{date}»), so the views never read `events` directly.
+ * One appearance of an event in a date range (Phase 6 B11). A one-off event has exactly one,
+ * keyed by the event id; a recurring event one per date, keyed «{eventId}@{date}» (Phase 7
+ * B6), so the views never read `events` directly.
  */
 export interface EventOccurrence {
   key: string;
   event: CalendarEvent;
+  /** First day of this occurrence (household zone; all-day: its key, Phase 6 B2). */
+  date: string;
   start: Date;
   end: Date;
 }

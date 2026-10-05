@@ -197,3 +197,66 @@ describe("updateEvent / deleteEvent", () => {
     expect(fake.state.commits).toEqual([]);
   });
 });
+
+describe("recurrence (Phase 7 B1, B10)", () => {
+  const rule = { freq: "weekly" as const, interval: 2, byWeekday: [6], until: "2026-12-31" };
+
+  it("creates a series with its rule and one «event_created»", async () => {
+    const { committed } = createEvent(
+      "h1",
+      {
+        title: "Grossputz",
+        category: "home",
+        allDay: false,
+        start: new Date("2026-10-03T08:00:00Z"),
+        end: new Date("2026-10-03T10:00:00Z"),
+        participants: "household",
+        recurrence: { ...rule, count: undefined },
+      },
+      "nevio",
+    );
+    await committed;
+    const [ops] = fake.state.commits;
+    expect(ops).toHaveLength(2);
+    expect(ops[0].data).toMatchObject({ recurrence: rule });
+    expect((ops[0].data as { recurrence: object }).recurrence).not.toHaveProperty("count");
+    expect(ops[1].data).toMatchObject({ type: "event_created", targetTitle: "Grossputz" });
+  });
+
+  it("leaves the rule out of one-off events", async () => {
+    const { committed } = createEvent(
+      "h1",
+      {
+        title: "Arzt",
+        category: "appointment",
+        allDay: false,
+        start: new Date("2026-10-06T06:15:00Z"),
+        end: new Date("2026-10-06T07:00:00Z"),
+        participants: ["anna"],
+      },
+      "anna",
+    );
+    await committed;
+    expect(fake.state.commits[0][0].data).not.toHaveProperty("recurrence");
+  });
+
+  it("changes the rule or removes it with deleteField()", async () => {
+    await updateEvent("h1", "e1", { recurrence: { ...rule, until: undefined, count: 4 } });
+    await updateEvent("h1", "e2", { recurrence: null });
+    expect(fake.state.writes).toEqual([
+      {
+        op: "update",
+        path: "households/h1/events/e1",
+        data: {
+          updatedAt: "SERVER_TIME",
+          recurrence: { freq: "weekly", interval: 2, byWeekday: [6], count: 4 },
+        },
+      },
+      {
+        op: "update",
+        path: "households/h1/events/e2",
+        data: { updatedAt: "SERVER_TIME", recurrence: "DELETE_FIELD" },
+      },
+    ]);
+  });
+});

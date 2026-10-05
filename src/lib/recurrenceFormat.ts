@@ -1,7 +1,7 @@
 import { addDaysToKey, daysBetweenKeys, endOfWeekKey, weekdayOfKey } from "../domain/dateKeys";
 import { rotationOrder } from "../domain/rotation";
 import type { RecurrenceRule, TaskRotation, WeekStart } from "../types";
-import { DEFAULT_TIME_ZONE, formatDate, fromDateKey } from "./format";
+import { DEFAULT_TIME_ZONE, formatDate, formatDayMonth, fromDateKey } from "./format";
 
 /**
  * German labels for recurrence and rotation (Phase 4 B10, D28, D29). Weekdays use the JS
@@ -71,7 +71,10 @@ export function describeRule(
       return short ? every : `${every} · ${weekdayList(days, weekStartsOn)}`;
     }
     case "monthly":
-      return short ? "Monatlich" : `Monatlich am ${rule.byMonthDay}.`;
+      if (short) return "Monatlich";
+      return rule.bySetPos === undefined
+        ? `Monatlich am ${rule.byMonthDay}.`
+        : `Monatlich am ${setPosLabel(rule.bySetPos)} ${WEEKDAY_NAMES[rule.byWeekday?.[0] ?? 0]}`;
     case "yearly":
       return short
         ? "Jährlich"
@@ -151,4 +154,42 @@ export function describeRuleInSentence(rule: RecurrenceRule, weekStartsOn: WeekS
 export function weekdayPlural(rule: RecurrenceRule): string | undefined {
   if (rule.freq !== "weekly" || rule.byWeekday?.length !== 1) return undefined;
   return `${WEEKDAY_NAMES[rule.byWeekday[0]]}e`;
+}
+
+/** «1.» … «4.» or «letzten» (Phase 7 D60), as in «Am 1. Samstag» / «Am letzten Samstag». */
+export function setPosLabel(position: number): string {
+  return position < 0 ? "letzten" : `${position}.`;
+}
+
+/** «31. Dez. 2026» for a date key (shown without weekday, with the year). */
+function dayMonthYear(key: string): string {
+  return `${formatDayMonth(fromDateKey(key), "UTC")} ${key.slice(0, 4)}`;
+}
+
+/**
+ * The end of an event rule for the picker summary (Phase 7 D63): «bis 31. Dez. 2026»,
+ * «10 Mal»; `undefined` for a series without end.
+ */
+export function describeRuleEnd(rule: RecurrenceRule): string | undefined {
+  if (rule.until !== undefined) return `bis ${dayMonthYear(rule.until)}`;
+  if (rule.count !== undefined) return `${rule.count} Mal`;
+  return undefined;
+}
+
+/**
+ * The second line of the Termin-Detail's rule block (D63): «Seit Sa., 19. Sept. · endet nie»,
+ * «… · endet am Do., 31. Dez. 2026», «… · endet nach 10 Terminen»; once the last occurrence
+ * is before today «Endete am Sa., 12. Sept.».
+ */
+export function describeSeriesEnd(
+  rule: RecurrenceRule,
+  range: { first: string; last: string | null },
+  todayKey: string,
+): string {
+  const date = (key: string) => formatDate(fromDateKey(key), "UTC");
+  if (range.last !== null && range.last < todayKey) return `Endete am ${date(range.last)}`;
+  let end = "endet nie";
+  if (rule.until !== undefined) end = `endet am ${date(rule.until)} ${rule.until.slice(0, 4)}`;
+  else if (rule.count !== undefined) end = `endet nach ${rule.count} Terminen`;
+  return `Seit ${date(range.first)} · ${end}`;
 }

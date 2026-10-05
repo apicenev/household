@@ -1,9 +1,9 @@
 import { ArrowPathIcon } from "@heroicons/react/16/solid";
 import { useId, type ReactNode } from "react";
 import { cx } from "../../lib/cx";
-import type { EventOccurrence, Member } from "../../types";
+import type { EventOccurrence, Member, WeekStart } from "../../types";
 import { CategoryLabel } from "../ui/CategoryLabel";
-import { ruleLine, spanLabel, timeColumn, timeLine } from "./calendarLabels";
+import { repeatLabel, ruleLine, spanLabel, timeColumn, timeLine } from "./calendarLabels";
 import { ParticipantAvatars } from "./ParticipantAvatars";
 
 interface EventCardProps {
@@ -13,12 +13,24 @@ interface EventCardProps {
   members: readonly Member[];
 }
 
-/** Category pill and «Tag 3 von 8» (D54) under the title. */
+/** «↻ Alle 2 Wochen» (`Calendar.dc.html`: 13 px muted, 14 px icon; Phase 7 B8). */
+export function RepeatLabel({ text, className }: { text: string; className?: string }) {
+  return (
+    <span className={cx("inline-flex items-center gap-0.75 text-[13px] text-ink-muted", className)}>
+      <ArrowPathIcon aria-hidden="true" className="size-3.5 shrink-0" />
+      {text}
+    </span>
+  );
+}
+
+/** Category pill, «↻ Alle 2 Wochen» and «Tag 3 von 8» (D54) under the title. */
 function MetaRow({ occurrence, dayKey }: { occurrence: EventOccurrence; dayKey: string }) {
   const span = spanLabel(occurrence, dayKey);
+  const repeat = repeatLabel(occurrence);
   return (
     <span className="flex flex-wrap items-center gap-2">
       <CategoryLabel kind="event" category={occurrence.event.category} size="sm" />
+      {repeat && <RepeatLabel text={repeat} />}
       {span && <span className="text-[13px] text-ink-muted">{span}</span>}
     </span>
   );
@@ -68,10 +80,16 @@ export function DesktopEventCard({
   dayKey,
   timeZone,
   members,
+  weekStartsOn,
   open,
   onToggle,
   actions,
-}: EventCardProps & { open: boolean; onToggle: () => void; actions?: ReactNode }) {
+}: EventCardProps & {
+  weekStartsOn: WeekStart;
+  open: boolean;
+  onToggle: () => void;
+  actions?: ReactNode;
+}) {
   const detailsId = useId();
   const { event } = occurrence;
   return (
@@ -103,7 +121,7 @@ export function DesktopEventCard({
         <div id={detailsId} className="mx-4 mb-4 flex flex-col gap-2 border-t border-line pt-2.5">
           <span className="flex items-center gap-1.5 text-body-sm font-semibold tabular-nums">
             <ArrowPathIcon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
-            {ruleLine(occurrence, timeZone, members)}
+            {ruleLine(occurrence, timeZone, members, weekStartsOn)}
           </span>
           {event.description && (
             <p className="text-body-sm whitespace-pre-line text-ink-muted">{event.description}</p>

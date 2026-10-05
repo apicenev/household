@@ -130,6 +130,8 @@ describe("recurring tasks: create", () => {
       { freq: "monthly", interval: 2, byMonthDay: 3 },
       { freq: "monthly", interval: 1, byMonthDay: 32 },
       { freq: "monthly", interval: 1, byMonthDay: 3, bySetPos: 1 },
+      // Valid for events (Phase 7), never for tasks.
+      { freq: "monthly", interval: 1, byWeekday: [6], bySetPos: 1 },
       { freq: "weekly", interval: 1, byWeekday: [6], until: "2026-12-31" },
       { freq: "weekly", interval: 1, byWeekday: [6], count: 10 },
       { freq: "yearly", interval: 1, byMonth: 13, byMonthDay: 1 },

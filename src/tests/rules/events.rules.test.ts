@@ -333,3 +333,77 @@ describe("events: activity (B12)", () => {
     await assertFails(deleteDoc(entry.ref));
   });
 });
+
+describe("events: recurrence (Phase 7 B1)", () => {
+  const everyOtherSat = { freq: "weekly", interval: 2, byWeekday: [6] };
+  const firstSat = { freq: "monthly", interval: 1, byWeekday: [6], bySetPos: 1 };
+
+  it("allows every rule shape, with until or count", async () => {
+    const db = dbAs(env, nevio);
+    const allowed = [
+      { freq: "daily", interval: 1 },
+      { freq: "daily", interval: 4, count: 99 },
+      everyOtherSat,
+      { ...everyOtherSat, until: "2026-12-31" },
+      { freq: "monthly", interval: 1, byMonthDay: 31, count: 2 },
+      firstSat,
+      { ...firstSat, bySetPos: -1, until: "2027-06-30" },
+      { freq: "yearly", interval: 1, byMonth: 2, byMonthDay: 29 },
+    ];
+    for (const [index, recurrence] of allowed.entries()) {
+      await assertSucceeds(create(db, newEvent(nevio, { recurrence }), `ok${index}`));
+    }
+    await assertSucceeds(
+      create(
+        db,
+        newEvent(nevio, { ...allDay("2026-10-01", "2026-10-01"), recurrence: firstSat }),
+        "allday",
+      ),
+    );
+  });
+
+  it("denies both ends, bad ends, bad positions and exceptions", async () => {
+    const db = dbAs(env, nevio);
+    const denied = [
+      { ...everyOtherSat, until: "2026-12-31", count: 3 },
+      { ...everyOtherSat, until: "31.12.2026" },
+      { ...everyOtherSat, until: 20261231 },
+      { ...everyOtherSat, count: 1 },
+      { ...everyOtherSat, count: 100 },
+      { ...everyOtherSat, count: "3" },
+      { ...firstSat, byMonthDay: 3 },
+      { ...firstSat, bySetPos: 5 },
+      { ...firstSat, bySetPos: 0 },
+      { ...firstSat, byWeekday: [1, 6] },
+      { ...firstSat, byWeekday: [7] },
+      { ...firstSat, interval: 2 },
+      { freq: "monthly", interval: 1, bySetPos: 1 },
+      { freq: "yearly", interval: 1, byMonth: 10, byMonthDay: 3, bySetPos: 1 },
+      { freq: "weekly", interval: 1, byWeekday: [6], exceptions: [] },
+      "weekly",
+    ];
+    for (const [index, recurrence] of denied.entries()) {
+      await assertFails(create(db, newEvent(nevio, { recurrence }), `bad${index}`));
+    }
+    await assertFails(
+      create(db, newEvent(nevio, { recurrence: everyOtherSat, exceptions: ["2026-10-17"] }), "ex"),
+    );
+  });
+
+  it("an edit sets, changes or removes the rule; a bad rule is denied", async () => {
+    await seedEvent();
+    const db = dbAs(env, nevio);
+    const update = (data: Record<string, unknown>) =>
+      updateDoc(doc(db, ...eventPath()), { ...data, updatedAt: serverTimestamp() });
+    await assertSucceeds(update({ recurrence: everyOtherSat }));
+    await assertSucceeds(update({ recurrence: { ...everyOtherSat, count: 4 } }));
+    await assertFails(update({ recurrence: { ...everyOtherSat, count: 4, until: "2026-12-31" } }));
+    await assertSucceeds(update({ recurrence: deleteField() }));
+  });
+
+  it("creating a series writes one «event_created»", async () => {
+    await assertSucceeds(
+      createBatch(dbAs(env, nevio), nevio, { event: { recurrence: everyOtherSat } }).commit(),
+    );
+  });
+});

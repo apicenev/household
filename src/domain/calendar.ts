@@ -12,16 +12,19 @@ import {
   daysBetweenKeys,
   daysInMonth,
   endOfWeekKey,
+  isDateKey,
   keyParts,
   dateKey as makeDateKey,
   startOfWeekKey,
 } from "./dateKeys";
-import { allDayKeys, dayBounds } from "./eventTime";
+import { allDayKeys, allDayToStored, dayBounds, instantToZoned, zonedToInstant } from "./eventTime";
+import { MAX_OCCURRENCES, occurrenceDates, seriesRange } from "./recurrence";
 
 /**
  * Calendar rules (Phase 6): month grid, which events touch which day, the multi-day bar,
- * «Demnächst» and the URL parameters. Pure functions; all-day events are compared by date
- * keys, timed events by instants in the household zone (B2).
+ * «Demnächst» and the URL parameters; recurring events are expanded here (Phase 7). Pure
+ * functions; all-day events are compared by date keys, timed events by instants in the
+ * household zone (Phase 6 B2).
  */
 
 /** Days «Demnächst» looks ahead, today included (B9). */
@@ -113,24 +116,196 @@ export function occurrenceDays(
   return { startKey, endKey: toDateKey(new Date(occurrence.end.getTime() - 1), timeZone) };
 }
 
+/** Later than any date the calendar shows: «no upper bound» for an expansion. */
+const FAR_FUTURE = "9999-12-31";
+
+/** «{eventId}@{date}»: the key and URL value of one occurrence of a series (Phase 7 B6, B9). */
+export function occurrenceKey(eventId: string, date: string): string {
+  return `${eventId}@${date}`;
+}
+
+/**
+ * First day of an event as stored, which is the anchor (and first occurrence) of a series
+ * (Phase 7 B3): the household-zone day of a timed start, the key of an all-day one.
+ */
+export function eventStartKey(event: CalendarEvent, timeZone: string): string {
+  return occurrenceDays({ event, start: event.start, end: event.end }, timeZone).startKey;
+}
+
+/** The only occurrence of a one-off event (and the first of a series as stored). */
+export function singleOccurrence(event: CalendarEvent, timeZone: string): EventOccurrence {
+  return {
+    key: event.id,
+    event,
+    date: eventStartKey(event, timeZone),
+    start: event.start,
+    end: event.end,
+  };
+}
+
+/**
+ * Start and end of a series' occurrence on `dateKey` (Phase 7 B4). All-day: the same number of
+ * days from that date. Timed: the start's **and** the end's clock time in the household zone
+ * (the end `dayOffset` local days later), so «10:00–12:00» stays that across DST; a time in
+ * the spring gap moves forward, an end that would fall before the start is the start.
+ */
+export function occurrenceTimes(
+  event: CalendarEvent,
+  dateKey: string,
+  timeZone: string,
+): { start: Date; end: Date } {
+  if (event.allDay) {
+    const { startKey, endKey } = allDayKeys(event);
+    return allDayToStored(dateKey, addDaysToKey(dateKey, daysBetweenKeys(startKey, endKey)));
+  }
+  const from = instantToZoned(event.start, timeZone);
+  if (dateKey === from.dateKey) return { start: event.start, end: event.end };
+  const to = instantToZoned(event.end, timeZone);
+  const start = zonedToInstant(dateKey, from.time, timeZone);
+  const endKey = addDaysToKey(dateKey, daysBetweenKeys(from.dateKey, to.dateKey));
+  const end = zonedToInstant(endKey, to.time, timeZone);
+  return { start, end: end.getTime() < start.getTime() ? start : end };
+}
+
+/** The occurrence of a series on `dateKey` (which must be on its schedule). */
+export function seriesOccurrence(
+  event: CalendarEvent,
+  dateKey: string,
+  timeZone: string,
+): EventOccurrence {
+  return {
+    key: occurrenceKey(event.id, dateKey),
+    event,
+    date: dateKey,
+    ...occurrenceTimes(event, dateKey, timeZone),
+  };
+}
+
 /**
  * Every appearance of the events within the days `firstKey` … `lastKey` (inclusive, household
- * zone; B11). Phase 6: one occurrence per event that touches the range; Phase 7 expands
- * recurring events here, so the views stay unchanged.
+ * zone; Phase 6 B11). A one-off event appears once if it touches the range; a recurring one
+ * once per occurrence touching it (REV-03, Phase 7 B6), at most `MAX_OCCURRENCES` per event.
+ * Occurrences that start before the range but reach into it (multi-day series, B7) count.
  */
 export function occurrencesInRange(
   events: readonly CalendarEvent[],
   firstKey: string,
   lastKey: string,
   timeZone: string,
+  weekStartsOn: WeekStart,
 ): EventOccurrence[] {
   const result: EventOccurrence[] = [];
-  for (const event of events) {
-    const occurrence = { key: event.id, event, start: event.start, end: event.end };
+  const touches = (occurrence: EventOccurrence) => {
     const { startKey, endKey } = occurrenceDays(occurrence, timeZone);
-    if (endKey >= firstKey && startKey <= lastKey) result.push(occurrence);
+    return endKey >= firstKey && startKey <= lastKey;
+  };
+  for (const event of events) {
+    const first = singleOccurrence(event, timeZone);
+    if (!event.recurrence) {
+      if (touches(first)) result.push(first);
+      continue;
+    }
+    const span = daysBetweenKeys(first.date, occurrenceDays(first, timeZone).endKey);
+    const dates = occurrenceDates(
+      event.recurrence,
+      first.date,
+      addDaysToKey(firstKey, -span),
+      lastKey,
+      weekStartsOn,
+    );
+    if (dates.length === MAX_OCCURRENCES && import.meta.env?.DEV) {
+      console.warn(`Event ${event.id}: expansion capped at ${MAX_OCCURRENCES} occurrences`);
+    }
+    for (const date of dates) {
+      const occurrence = seriesOccurrence(event, date, timeZone);
+      if (touches(occurrence)) result.push(occurrence);
+    }
   }
   return result;
+}
+
+/**
+ * First and last occurrence of a series (D63; `last` `null` = never ends), `null` for a
+ * one-off event or a series without occurrences.
+ */
+export function seriesBounds(
+  event: CalendarEvent,
+  timeZone: string,
+  weekStartsOn: WeekStart,
+): { first: string; last: string | null } | null {
+  if (!event.recurrence) return null;
+  return seriesRange(event.recurrence, eventStartKey(event, timeZone), weekStartsOn);
+}
+
+/** «Nächste Termine» (D64): up to `count` occurrences of a series after `afterKey`. */
+export function nextOccurrences(
+  event: CalendarEvent,
+  afterKey: string,
+  count: number,
+  timeZone: string,
+  weekStartsOn: WeekStart,
+): EventOccurrence[] {
+  if (!event.recurrence) return [];
+  return occurrenceDates(
+    event.recurrence,
+    eventStartKey(event, timeZone),
+    addDaysToKey(afterKey, 1),
+    FAR_FUTURE,
+    weekStartsOn,
+    count,
+  ).map((date) => seriesOccurrence(event, date, timeZone));
+}
+
+function shareParticipants(a: EventParticipants, b: EventParticipants): boolean {
+  if (a === "household" || b === "household") return true;
+  return a.some((uid) => b.includes(uid));
+}
+
+/**
+ * «Während Ferien» (D65): the occurrence's first day lies inside another all-day `travel`
+ * event of ≥ 2 days that shares at least one participant («Alle» shares with everyone).
+ */
+export function duringTrip(
+  occurrence: EventOccurrence,
+  occurrences: readonly EventOccurrence[],
+): boolean {
+  return occurrences.some((trip) => {
+    if (trip.event.id === occurrence.event.id || trip.event.category !== "travel") return false;
+    if (!isMultiDayAllDay(trip)) return false;
+    const { startKey, endKey } = allDayKeys(trip);
+    return (
+      startKey <= occurrence.date &&
+      occurrence.date <= endKey &&
+      shareParticipants(trip.event.participants, occurrence.event.participants)
+    );
+  });
+}
+
+/**
+ * The occurrence behind `?event=` (Phase 7 B9): «{id}@{date}» if that date is on the series'
+ * schedule; otherwise (a bare id, or a date the schedule no longer has) the next occurrence
+ * from today, or the last one of an ended series. A one-off event ignores the date. `null`
+ * for an unknown event.
+ */
+export function resolveOccurrenceParam(
+  param: string,
+  events: readonly CalendarEvent[],
+  todayKey: string,
+  timeZone: string,
+  weekStartsOn: WeekStart,
+): EventOccurrence | null {
+  const [id, date] = param.split("@");
+  const event = events.find((candidate) => candidate.id === id);
+  if (!event) return null;
+  if (!event.recurrence) return singleOccurrence(event, timeZone);
+  const rule = event.recurrence;
+  const anchor = eventStartKey(event, timeZone);
+  if (isDateKey(date) && occurrenceDates(rule, anchor, date, date, weekStartsOn, 1).length > 0) {
+    return seriesOccurrence(event, date, timeZone);
+  }
+  const next = occurrenceDates(rule, anchor, todayKey, FAR_FUTURE, weekStartsOn, 1)[0];
+  const fallback = next ?? seriesRange(rule, anchor, weekStartsOn)?.last ?? anchor;
+  return seriesOccurrence(event, fallback, timeZone);
 }
 
 /** All-day and at least two days long: drawn as a bar (D54) with «Tag n von m». */
