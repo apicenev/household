@@ -3,6 +3,7 @@ import {
   deleteDoc,
   deleteField,
   doc,
+  FieldPath,
   onSnapshot,
   serverTimestamp,
   Timestamp,
@@ -10,11 +11,13 @@ import {
   writeBatch,
   type Unsubscribe,
 } from "firebase/firestore";
-import { eventConverter } from "../lib/converters/eventConverter";
+import { eventConverter, exceptionToDoc } from "../lib/converters/eventConverter";
 import { db } from "../lib/firebase";
 import type {
   CalendarEvent,
   EventChanges,
+  EventException,
+  EventOverride,
   EventParticipants,
   NewEventInput,
   RecurrenceRule,
@@ -105,9 +108,15 @@ export function updateEvent(
   householdId: string,
   eventId: string,
   changes: EventChanges,
+  { clearExceptions = false }: { clearExceptions?: boolean } = {},
 ): Promise<void> {
   if (Object.keys(changes).length === 0) return Promise.resolve();
   const data: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  // Phase 9 B12: a new rule, start or times reset the single-occurrence changes.
+  if (clearExceptions) {
+    data.exceptions = deleteField();
+    data.lastExceptionKey = deleteField();
+  }
   if (changes.title !== undefined) data.title = changes.title.trim();
   if (changes.description !== undefined) {
     const description = changes.description?.trim();
@@ -124,6 +133,52 @@ export function updateEvent(
     data.recurrence = changes.recurrence ? recurrenceData(changes.recurrence) : deleteField();
   }
   return updateDoc(eventRef(householdId, eventId), data);
+}
+
+/**
+ * Writes one exception of a series (REV-07, Phase 9 B10) under its schedule date, naming the
+ * key in `lastExceptionKey` for the rules. No activity (edits write none).
+ */
+function writeException(
+  householdId: string,
+  eventId: string,
+  dateKey: string,
+  exception: EventException,
+): Promise<void> {
+  return updateDoc(
+    eventRef(householdId, eventId),
+    new FieldPath("exceptions", dateKey),
+    exceptionToDoc(exception),
+    "lastExceptionKey",
+    dateKey,
+    "updatedAt",
+    serverTimestamp(),
+  );
+}
+
+/** «Nur diesen Termin» löschen (REV-07): the occurrence on `dateKey` is cancelled. */
+export function cancelOccurrence(
+  householdId: string,
+  eventId: string,
+  dateKey: string,
+): Promise<void> {
+  return writeException(householdId, eventId, dateKey, { cancelled: true });
+}
+
+/** «Nur diesen Termin» bearbeiten (REV-07): the occurrence on `dateKey` gets `override`. */
+export function editOccurrence(
+  householdId: string,
+  eventId: string,
+  dateKey: string,
+  override: EventOverride,
+): Promise<void> {
+  const clean: EventOverride = { ...override };
+  if (clean.title !== undefined) clean.title = clean.title.trim();
+  if (clean.description !== undefined) clean.description = clean.description.trim();
+  if (clean.participants !== undefined) {
+    clean.participants = participantsData(clean.participants);
+  }
+  return writeException(householdId, eventId, dateKey, clean);
 }
 
 /** Deletes an event (CAL-06, B13); no activity. */

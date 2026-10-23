@@ -8,6 +8,7 @@ import { AppRoutes } from "../router/AppRoutes";
 import {
   fakeStore,
   householdServiceMock,
+  makeHousehold,
   makeMember,
   memberServiceMock,
   nevioProfile,
@@ -154,13 +155,205 @@ describe("Haushalt page", () => {
     );
     await waitFor(() => expect(currentPath()).toBe("/dashboard"));
   });
+});
 
-  it("has no Gefahrenzone and no member menu (B2, B3)", async () => {
+describe("Gefahrenzone and member menu (Phase 9)", () => {
+  beforeEach(() => {
+    for (const fn of [
+      householdServiceMock.leaveHousehold,
+      householdServiceMock.removeMember,
+      householdServiceMock.handOverHousehold,
+      householdServiceMock.deleteHousehold,
+    ]) {
+      fn.mockReset().mockResolvedValue(undefined);
+    }
+  });
+
+  const zone = () => screen.getByRole("region", { name: "Gefahrenzone" });
+  const openMenu = async (name: string) => userEvent.click(screen.getByRole("button", { name }));
+
+  it("gives a member «Profil bearbeiten» and «Haushalt verlassen», nothing on others' rows (D83)", async () => {
+    renderHousehold({ as: annaProfile });
+    await page();
+    expect(screen.queryByRole("button", { name: "Optionen für Nevio" })).not.toBeInTheDocument();
+    await openMenu("Optionen für dich");
+    const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
+    expect(items).toEqual(["Profil bearbeiten", "Haushalt verlassen"]);
+    expect(within(zone()).getByRole("button", { name: "Haushalt verlassen" })).toBeEnabled();
+    expect(within(zone()).queryByRole("button", { name: "Haushalt löschen" })).toBeNull();
+  });
+
+  it("disables leaving for the owner with the designed hint (D84) and offers the owner actions", async () => {
     renderHousehold();
     await page();
-    expect(screen.queryByText("Gefahrenzone")).not.toBeInTheDocument();
-    expect(screen.queryByText("Haushalt verlassen")).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Optionen für/ })).not.toBeInTheDocument();
+    expect(within(zone()).getByRole("button", { name: "Haushalt verlassen" })).toBeDisabled();
+    expect(
+      within(zone()).getByText(
+        "Als Besitzer machst du zuerst jemand anderen zum Besitzer, bevor du den Haushalt verlässt.",
+      ),
+    ).toBeInTheDocument();
+    expect(within(zone()).getByRole("button", { name: "Haushalt löschen" })).toBeEnabled();
+    await openMenu("Optionen für Anna");
+    expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
+      "Haushalt übergeben",
+      "Aus dem Haushalt entfernen",
+    ]);
+  });
+
+  it("leaves after the confirmation and says so (D84, D87)", async () => {
+    renderHousehold({ as: annaProfile });
+    await page();
+    await userEvent.click(within(zone()).getByRole("button", { name: "Haushalt verlassen" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Haushalt verlassen?" });
+    expect(
+      within(dialog).getByText("Deine offenen Aufgaben werden niemandem mehr zugewiesen."),
+    ).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Verlassen" }));
+    expect(householdServiceMock.leaveHousehold).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "h1" }),
+      expect.objectContaining({ uid: "anna" }),
+      [],
+    );
+    expect(await screen.findByText("Du hast «Musterstrasse 12» verlassen.")).toBeInTheDocument();
+  });
+
+  it("shows the write error when leaving fails and keeps the dialog", async () => {
+    householdServiceMock.leaveHousehold.mockRejectedValue(
+      Object.assign(new Error("denied"), { code: "permission-denied" }),
+    );
+    renderHousehold({ as: annaProfile });
+    await page();
+    await userEvent.click(within(zone()).getByRole("button", { name: "Haushalt verlassen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Verlassen" }));
+    expect(await screen.findByText("Dazu hast du keine Berechtigung.")).toBeInTheDocument();
+    expect(screen.getByRole("alertdialog", { name: "Haushalt verlassen?" })).toBeInTheDocument();
+  });
+
+  it("deletes only after the household name is typed", async () => {
+    renderHousehold();
+    await page();
+    await userEvent.click(within(zone()).getByRole("button", { name: "Haushalt löschen" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Haushalt löschen?" });
+    expect(
+      within(dialog).getByText(
+        "Alle Aufgaben, Listen und Termine von Nevio und Anna werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.",
+      ),
+    ).toBeInTheDocument();
+    const confirm = within(dialog).getByRole("button", { name: /endgültig löschen/i });
+    expect(confirm).toBeDisabled();
+    await userEvent.type(within(dialog).getByRole("textbox"), "Musterstrasse 12");
+    await userEvent.click(confirm);
+    expect(householdServiceMock.deleteHousehold).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "h1" }),
+      "nevio",
+    );
+    expect(await screen.findByText("«Musterstrasse 12» wurde gelöscht.")).toBeInTheDocument();
+  });
+
+  it("hands over with a gender-neutral confirmation (D85)", async () => {
+    renderHousehold();
+    await page();
+    await openMenu("Optionen für Anna");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Haushalt übergeben" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Haushalt an Anna übergeben?" });
+    expect(
+      within(dialog).getByText(
+        "Danach kann nur noch Anna Einstellungen ändern, Mitglieder entfernen und den Haushalt löschen.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Übergeben" }));
+    expect(householdServiceMock.handOverHousehold).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "h1" }),
+      "nevio",
+      expect.objectContaining({ uid: "anna" }),
+    );
+    expect(await screen.findByText("Anna verwaltet jetzt «Musterstrasse 12».")).toBeInTheDocument();
+  });
+
+  it("removes a member after the confirmation (D86)", async () => {
+    renderHousehold();
+    await page();
+    await openMenu("Optionen für Anna");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Aus dem Haushalt entfernen" }));
+    const dialog = screen.getByRole("alertdialog", { name: "Anna entfernen?" });
+    expect(
+      within(dialog).getByText(
+        "Anna verliert den Zugriff auf «Musterstrasse 12». Offene Aufgaben von Anna werden niemandem mehr zugewiesen.",
+      ),
+    ).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Entfernen" }));
+    expect(householdServiceMock.removeMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "h1" }),
+      "nevio",
+      expect.objectContaining({ uid: "anna" }),
+      [],
+    );
+    expect(await screen.findByText("Anna wurde entfernt.")).toBeInTheDocument();
+  });
+
+  it("tells a sole member to delete instead (D84)", async () => {
+    fakeStore.household = makeHousehold({ memberIds: ["nevio"] });
+    fakeStore.members = fakeStore.members.filter((member) => member.uid === "nevio");
+    renderHousehold();
+    await page();
+    expect(within(zone()).getByRole("button", { name: "Haushalt verlassen" })).toBeDisabled();
+    expect(
+      within(zone()).getByText(
+        "Du bist allein im Haushalt. Lösche ihn, wenn du ihn nicht mehr brauchst.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("blocks the lifecycle actions in the demo household (D96)", async () => {
+    fakeStore.household = makeHousehold({ demo: true });
+    renderHousehold();
+    await page();
+    expect(within(zone()).getByRole("button", { name: "Haushalt verlassen" })).toBeDisabled();
+    expect(within(zone()).getByRole("button", { name: "Haushalt löschen" })).toBeDisabled();
+    expect(within(zone()).getByText("In der Demo nicht verfügbar.")).toBeInTheDocument();
+    await openMenu("Optionen für Anna");
+    for (const item of screen.getAllByRole("menuitem")) {
+      expect(item).toHaveAttribute("aria-disabled", "true");
+    }
+  });
+
+  it("locks the household name and the own name in the demo, not the colour (C5, D96)", async () => {
+    fakeStore.household = makeHousehold({ demo: true });
+    renderHousehold();
+    await page();
+    const settingsName = within(section("Einstellungen")).getByRole("textbox", { name: "Name" });
+    const profileName = within(section("Mein Profil")).getByRole("textbox", { name: "Name" });
+    expect(settingsName).toBeDisabled();
+    expect(profileName).toBeDisabled();
+    expect(profileName).toHaveAccessibleDescription("In der Demo nicht verfügbar.");
+    expect(within(section("Mein Profil")).getAllByRole("radio")[0]).toBeEnabled();
+  });
+
+  it("offers to resume an interrupted delete (D89)", async () => {
+    fakeStore.household = makeHousehold({ deleting: true });
+    renderHousehold();
+    await page();
+    expect(within(zone()).getByText("Das Löschen wurde unterbrochen.")).toBeInTheDocument();
+    await userEvent.click(within(zone()).getByRole("button", { name: "Löschen fortsetzen" }));
+    expect(householdServiceMock.deleteHousehold).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "h1" }),
+      "nevio",
+    );
+  });
+
+  it("disables the actions offline (D91)", async () => {
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    renderHousehold({ as: annaProfile });
+    await page();
+    expect(within(zone()).getByRole("button", { name: "Haushalt verlassen" })).toBeDisabled();
+  });
+
+  it("shows the outlined section with buttons on desktop", async () => {
+    mockDesktop(true);
+    renderHousehold();
+    await page();
+    expect(within(zone()).getByRole("heading", { name: "Gefahrenzone" })).toBeInTheDocument();
+    expect(within(zone()).getByRole("button", { name: "Haushalt löschen" })).toBeEnabled();
   });
 });
 

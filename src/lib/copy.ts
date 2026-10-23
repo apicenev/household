@@ -114,6 +114,67 @@ export const householdCopy = {
   newCode: "Neuer Code",
 } as const;
 
+/** Phase 9 D97: a render error (the D8 pattern). */
+export const crashCopy = {
+  title: "Etwas ist schiefgelaufen",
+  text: "Lade die Seite neu. Wenn es wieder passiert, melde dich ab und wieder an.",
+  reload: "Neu laden",
+} as const;
+
+/**
+ * Household lifecycle (Phase 9): Gefahrenzone, member menu and their dialogs (D83–D91), and
+ * the demo household (D96). Names of other people are never turned into «Besitzerin» /
+ * «Besitzer» (D85): the app doesn't know anyone's gender.
+ */
+export const lifecycleCopy = {
+  dangerZone: "Gefahrenzone",
+  leave: "Haushalt verlassen",
+  delete: "Haushalt löschen",
+  /** D83 */
+  menuLabel: (name: string, isMe: boolean) => (isMe ? "Optionen für dich" : `Optionen für ${name}`),
+  editProfile: "Profil bearbeiten",
+  handOver: "Haushalt übergeben",
+  remove: "Aus dem Haushalt entfernen",
+  /** D84 (designed hint for owners) */
+  ownerHint:
+    "Als Besitzer machst du zuerst jemand anderen zum Besitzer, bevor du den Haushalt verlässt.",
+  aloneHint: "Du bist allein im Haushalt. Lösche ihn, wenn du ihn nicht mehr brauchst.",
+  leaveTitle: "Haushalt verlassen?",
+  leaveText: "Deine offenen Aufgaben werden niemandem mehr zugewiesen.",
+  leaveConfirm: "Verlassen",
+  leaving: "Verlässt…",
+  /** Designed delete dialog; the names as in D22. */
+  deleteTitle: "Haushalt löschen?",
+  deleteText: (names: readonly string[]) =>
+    `Alle Aufgaben, Listen und Termine von ${listFormat(names)} werden endgültig gelöscht. Das lässt sich nicht rückgängig machen.`,
+  deleteConfirmPhone: "Haushalt endgültig löschen",
+  deleteConfirmDesktop: "Endgültig löschen",
+  /** D85 */
+  handOverTitle: (name: string) => `Haushalt an ${name} übergeben?`,
+  handOverText: (name: string) =>
+    `Danach kann nur noch ${name} Einstellungen ändern, Mitglieder entfernen und den Haushalt löschen.`,
+  handOverConfirm: "Übergeben",
+  handingOver: "Übergibt…",
+  handedOver: (name: string, household: string) => `${name} verwaltet jetzt «${household}».`,
+  /** D86 */
+  removeTitle: (name: string) => `${name} entfernen?`,
+  removeText: (name: string, household: string) =>
+    `${name} verliert den Zugriff auf «${household}». Offene Aufgaben von ${name} werden niemandem mehr zugewiesen.`,
+  removeConfirm: "Entfernen",
+  removing: "Entfernt…",
+  removed: (name: string) => `${name} wurde entfernt.`,
+  /** D87 */
+  left: (household: string) => `Du hast «${household}» verlassen.`,
+  deleted: (household: string) => `«${household}» wurde gelöscht.`,
+  /** D88 */
+  ended: "Du gehörst keinem Haushalt mehr an. Erstelle einen neuen oder tritt mit einem Code bei.",
+  /** D89 */
+  interrupted: "Das Löschen wurde unterbrochen.",
+  resumeDelete: "Löschen fortsetzen",
+  /** D96 */
+  demoBlocked: "In der Demo nicht verfügbar.",
+} as const;
+
 /** Task wording (Phase 3): list, filters, sheet, toasts and derived states D12–D25. */
 export const taskCopy = {
   groups: {
@@ -397,6 +458,28 @@ export const calendarCopy = {
       : `Alle Termine dieser Serie verschwinden für ${listFormat(names)}.`,
   /** D66 */
   untilBeforeStart: "Das Enddatum darf nicht vor dem Beginn liegen.",
+  /** Phase 9 D92: «Nur diesen Termin» / «Ganze Serie» (the task dialog's choice). */
+  single: {
+    one: "Nur diesen Termin",
+    all: "Ganze Serie",
+    editTitle: "Welche Termine bearbeiten?",
+    editLegend: "Welche Termine möchtest du bearbeiten?",
+    deleteLegend: "Was möchtest du löschen?",
+    continue: "Weiter",
+    /** «Nur der Termin am Sa., 10. Okt.» */
+    oneHint: (date: string) => `Nur der Termin am ${date.endsWith(".") ? date : `${date}.`}`,
+    /** «Alle Termine seit Sa., 19. Sept.» */
+    allEditHint: (since: string) => `Alle Termine seit ${since}.`,
+    oneCta: "Nur diesen Termin löschen",
+    allCta: "Ganze Serie löschen",
+    /** D93: the sheet of one occurrence. */
+    sheetHint: (date: string) =>
+      `Änderungen gelten nur für ${date.endsWith(".") ? date : `${date}.`}`,
+    /** D94 */
+    changed: "Einzeln geändert",
+    /** D95 */
+    resetNote: "Einzeln geänderte und abgesagte Termine dieser Serie werden zurückgesetzt.",
+  },
 } as const;
 
 /** Start (Phase 8): `Dashboard.dc.html`, D67–D76. */
@@ -494,6 +577,10 @@ export const activityCopy = {
   bought: " gekauft",
   eventCreated: " erstellt",
   joined: " beigetreten",
+  /** Phase 9 D90 */
+  theHousehold: "den Haushalt",
+  left: " verlassen",
+  removed: " aus dem Haushalt entfernt",
   itemCount: (count: number) => `${count} Artikel`,
   quoted: (title: string) => `«${title}»`,
   /** D78 sub lines */

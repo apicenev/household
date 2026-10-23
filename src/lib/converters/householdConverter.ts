@@ -18,6 +18,8 @@ export interface HouseholdDoc {
   inviteCode: string;
   inviteCreatedAt: Timestamp;
   rotationOrder?: string[];
+  demo?: boolean;
+  deleting?: boolean;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
@@ -38,6 +40,8 @@ export const householdConverter: FirestoreDataConverter<Household, HouseholdDoc>
       updatedAt: Timestamp.fromDate(h.updatedAt),
     };
     if (h.rotationOrder !== undefined) data.rotationOrder = h.rotationOrder;
+    if (h.demo !== undefined) data.demo = h.demo;
+    if (h.deleting !== undefined) data.deleting = h.deleting;
     return data;
   },
   fromFirestore(snapshot: QueryDocumentSnapshot<DocumentData>, options?: SnapshotOptions) {
@@ -52,6 +56,8 @@ export const householdConverter: FirestoreDataConverter<Household, HouseholdDoc>
       inviteCode: data.inviteCode,
       inviteCreatedAt: toDate(data.inviteCreatedAt),
       rotationOrder: Array.isArray(data.rotationOrder) ? [...data.rotationOrder] : undefined,
+      ...(data.demo === true ? { demo: true } : {}),
+      ...(data.deleting === true ? { deleting: true } : {}),
       createdAt: toDate(data.createdAt),
       updatedAt: toDate(data.updatedAt),
     };

@@ -9,7 +9,9 @@ export type {
   CalendarEvent,
   EventCategory,
   EventChanges,
+  EventException,
   EventOccurrence,
+  EventOverride,
   EventParticipants,
   NewEventInput,
 } from "./Event";

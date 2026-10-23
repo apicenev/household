@@ -67,6 +67,7 @@ export function EventDetail({
               <p className="flex flex-col gap-0.5">
                 <span className="text-[15px] font-semibold tabular-nums">{series.rule}</span>
                 {series.since && <span className="text-[13px]">{series.since}</span>}
+                {series.changed && <span className="text-[13px]">{series.changed}</span>}
               </p>
             </div>
           )}

@@ -4,6 +4,7 @@ import { openItemCount } from "../../domain/shopping";
 import { shoppingCopy } from "../../lib/copy";
 import { cx } from "../../lib/cx";
 import { useHousehold } from "../../lib/household/useHousehold";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { OfflineBanner } from "./OfflineBanner";
 import { QuickAddSheet } from "./QuickAddSheet";
 import { QuickAddContext, type QuickAddEntry } from "./quickAddContext";
@@ -77,7 +78,8 @@ export function AppLayout({ children }: { children?: ReactNode }) {
           >
             <div className="mx-auto flex w-full max-w-270 flex-1 flex-col gap-6">
               <OfflineBanner />
-              {children ?? <Outlet />}
+              {/* Phase 9 D97: a crashing page keeps the shell. */}
+              <ErrorBoundary resetKey={location.pathname}>{children ?? <Outlet />}</ErrorBoundary>
             </div>
           </main>
         </div>

@@ -1,6 +1,8 @@
+import { LockClosedIcon } from "@heroicons/react/16/solid";
 import { useState } from "react";
 import { initialsFor, validateDisplayName } from "../../domain/member";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
+import { lifecycleCopy } from "../../lib/copy";
 import { firestoreErrorMessage } from "../../lib/firestoreErrors";
 import { updateMyProfile } from "../../services/memberService";
 import type { AvatarColor, Household, UserProfile } from "../../types";
@@ -13,7 +15,8 @@ import { useAutosaveName } from "./useAutosaveName";
 /**
  * «Mein Profil» (HH-05): name and avatar colour, saved on blur / change (B1) into the profile
  * and the member doc. The avatar preview follows the typed name live. Target of the account
- * menu's «Profil» (`#profil`).
+ * menu's «Profil» (`#profil`). In the demo household the name stays (Phase 9 C5, D96); the
+ * colour can still change.
  */
 export function MyProfile({
   profile,
@@ -45,12 +48,16 @@ export function MyProfile({
     }
   }
 
+  const demo = household.demo === true;
   const nameField = (
     <TextField
       label="Name"
       name="displayName"
       autoComplete="name"
       {...name}
+      disabled={demo}
+      leading={demo ? <LockClosedIcon className="size-4" /> : undefined}
+      helper={demo ? lifecycleCopy.demoBlocked : undefined}
       className={desktop ? "flex-1" : undefined}
       inputClassName="lg:h-11"
     />

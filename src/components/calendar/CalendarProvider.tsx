@@ -1,14 +1,22 @@
 import { TrashIcon } from "@heroicons/react/20/solid";
+import { PencilSquareIcon } from "@heroicons/react/24/outline";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
 import { useAuth } from "../../lib/auth/useAuth";
 import { actions as actionLabels, calendarCopy } from "../../lib/copy";
 import { GENERIC_WRITE_ERROR } from "../../lib/firestoreErrors";
 import { useLoadedHousehold } from "../../lib/household/useHousehold";
-import { eventStartKey } from "../../domain/calendar";
+import { clearsExceptions, eventStartKey, occurrenceOn, overrideFor } from "../../domain/calendar";
 import { formatDate, fromDateKey } from "../../lib/format";
-import { createEvent, deleteEvent, updateEvent } from "../../services/eventService";
-import type { CalendarEvent } from "../../types";
+import {
+  cancelOccurrence,
+  createEvent,
+  deleteEvent,
+  editOccurrence,
+  updateEvent,
+} from "../../services/eventService";
+import type { CalendarEvent, EventOccurrence } from "../../types";
+import { SeriesDeleteChoice, type SeriesChoice } from "../tasks/SeriesDeleteChoice";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Sheet } from "../ui/Sheet";
@@ -34,23 +42,39 @@ const REJECTION_SETTLE_MS = 300;
 
 type SheetState =
   | { mode: "new"; options: NewEventOptions }
-  | { mode: "edit"; eventId: string; onDeleted?: () => void };
+  | { mode: "edit"; eventId: string; onDeleted?: () => void }
+  // Phase 9 D93: one occurrence of a series, by its schedule date.
+  | { mode: "occurrence"; eventId: string; dateKey: string; onDeleted?: () => void };
+
+interface PendingChoice {
+  /** The occurrence as shown (moved or changed ones with their own date and title). */
+  occurrence: EventOccurrence;
+  onDeleted?: () => void;
+}
+
+/** «Sa., 10. Okt.» of a date key. */
+const dayLabel = (dateKey: string) => formatDate(fromDateKey(dateKey), "UTC");
 
 /**
  * Calendar writes plus the one shared Termin-Sheet and delete confirmation (6.8) for the
  * whole shell of a loaded household, so the Kalender page and the Schnellerfassung share them
- * (like TaskProvider and ShoppingProvider).
+ * (like TaskProvider and ShoppingProvider). For an occurrence of a series, «Bearbeiten» and
+ * «Löschen» first ask «Nur diesen Termin / Ganze Serie» (Phase 9 D92, REV-07).
  */
 export function CalendarProvider({ children }: { children: ReactNode }) {
   const { actions, deletedHere } = useCalendarWriter();
-  const { members } = useLoadedHousehold();
+  const { household, members, events } = useLoadedHousehold();
   const [sheet, setSheet] = useState<SheetState | null>(null);
   // Bumped on every open, so the form starts from fresh values.
   const [sheetKey, setSheetKey] = useState(0);
   const [deleting, setDeleting] = useState<{
     event: CalendarEvent;
     onDeleted?: () => void;
+    occurrence?: EventOccurrence;
   } | null>(null);
+  const [deleteChoice, setDeleteChoice] = useState<SeriesChoice>("one");
+  const [editing, setEditing] = useState<PendingChoice | null>(null);
+  const [editChoice, setEditChoice] = useState<SeriesChoice>("one");
 
   const openNewEvent = useCallback((options: NewEventOptions = {}) => {
     setSheet({ mode: "new", options });
@@ -60,16 +84,44 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
     setSheet({ mode: "edit", eventId, onDeleted });
     setSheetKey((key) => key + 1);
   }, []);
+  const editOccurrenceChoice = useCallback(
+    (occurrence: EventOccurrence, onDeleted?: () => void) => {
+      if (!occurrence.event.recurrence || !occurrence.seriesDate) {
+        openEditEvent(occurrence.event.id, onDeleted);
+        return;
+      }
+      setEditChoice("one");
+      setEditing({ occurrence, onDeleted });
+    },
+    [openEditEvent],
+  );
   const closeSheet = useCallback(() => setSheet(null), []);
   const confirmDelete = useCallback(
-    (event: CalendarEvent, onDeleted?: () => void) => setDeleting({ event, onDeleted }),
+    (event: CalendarEvent, onDeleted?: () => void, occurrence?: EventOccurrence) => {
+      setDeleteChoice("one");
+      setDeleting({ event, onDeleted, occurrence });
+    },
     [],
   );
 
   const value = useMemo<CalendarContextValue>(
-    () => ({ actions, openNewEvent, openEditEvent, confirmDelete, deletedHere }),
-    [actions, openNewEvent, openEditEvent, confirmDelete, deletedHere],
+    () => ({
+      actions,
+      openNewEvent,
+      openEditEvent,
+      editOccurrence: editOccurrenceChoice,
+      confirmDelete,
+      deletedHere,
+    }),
+    [actions, openNewEvent, openEditEvent, editOccurrenceChoice, confirmDelete, deletedHere],
   );
+
+  // The stored series behind a (possibly changed) occurrence.
+  const seriesOf = (eventId: string) => events.find((event) => event.id === eventId);
+  const deletingOne =
+    deleting?.occurrence?.seriesDate && deleting.event.recurrence ? deleting.occurrence : null;
+  const names = members.map((member) => member.displayName);
+  const editingSeries = editing ? seriesOf(editing.occurrence.event.id) : undefined;
 
   return (
     <CalendarContext.Provider value={value}>
@@ -78,8 +130,8 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
         key={sheetKey}
         state={sheet}
         onClose={closeSheet}
-        onDelete={(event) =>
-          confirmDelete(event, sheet?.mode === "edit" ? sheet.onDeleted : undefined)
+        onDelete={(event, occurrence) =>
+          confirmDelete(event, sheet?.mode !== "new" ? sheet?.onDeleted : undefined, occurrence)
         }
       />
       <ConfirmDialog
@@ -90,15 +142,80 @@ export function CalendarProvider({ children }: { children: ReactNode }) {
           // Close the sheet first, so its «deleted elsewhere» check doesn't fire (D52).
           setSheet(null);
           deleting.onDeleted?.();
-          actions.remove(deleting.event);
+          if (deletingOne?.seriesDate && deleteChoice === "one") {
+            actions.cancelOccurrence(deleting.event, deletingOne.seriesDate);
+          } else {
+            actions.remove(deleting.event);
+          }
           setDeleting(null);
         }}
-        title={deleting ? calendarCopy.deleteTitle(deleting.event.title) : ""}
-        text={(deleting?.event.recurrence
-          ? calendarCopy.deleteSeriesText
-          : calendarCopy.deleteText)(members.map((member) => member.displayName))}
-        confirmLabel={actionLabels.delete}
-      />
+        title={
+          deleting ? calendarCopy.deleteTitle(deletingOne?.event.title ?? deleting.event.title) : ""
+        }
+        text={
+          deletingOne
+            ? calendarCopy.single.deleteLegend
+            : (deleting?.event.recurrence
+                ? calendarCopy.deleteSeriesText
+                : calendarCopy.deleteText)(names)
+        }
+        confirmLabel={
+          deletingOne
+            ? deleteChoice === "one"
+              ? calendarCopy.single.oneCta
+              : calendarCopy.single.allCta
+            : actionLabels.delete
+        }
+      >
+        {deletingOne && (
+          <SeriesDeleteChoice
+            value={deleteChoice}
+            onChange={setDeleteChoice}
+            labels={{ one: calendarCopy.single.one, all: calendarCopy.single.all }}
+            legend={calendarCopy.single.deleteLegend}
+            oneHint={calendarCopy.single.oneHint(dayLabel(deletingOne.date))}
+            allHint={calendarCopy.deleteSeriesText(names)}
+          />
+        )}
+      </ConfirmDialog>
+      <ConfirmDialog
+        open={editing !== null && editingSeries !== undefined}
+        onClose={() => setEditing(null)}
+        onConfirm={() => {
+          if (!editing?.occurrence.seriesDate) return;
+          const { occurrence, onDeleted } = editing;
+          setEditing(null);
+          if (editChoice === "all") {
+            openEditEvent(occurrence.event.id, onDeleted);
+            return;
+          }
+          setSheet({
+            mode: "occurrence",
+            eventId: occurrence.event.id,
+            dateKey: occurrence.seriesDate ?? occurrence.date,
+            onDeleted,
+          });
+          setSheetKey((key) => key + 1);
+        }}
+        title={calendarCopy.single.editTitle}
+        confirmLabel={calendarCopy.single.continue}
+        icon={PencilSquareIcon}
+        tone="brand"
+      >
+        {editing && editingSeries && (
+          <SeriesDeleteChoice
+            value={editChoice}
+            onChange={setEditChoice}
+            labels={{ one: calendarCopy.single.one, all: calendarCopy.single.all }}
+            legend={calendarCopy.single.editLegend}
+            oneHint={calendarCopy.single.oneHint(dayLabel(editing.occurrence.date))}
+            allHint={calendarCopy.single.allEditHint(
+              dayLabel(eventStartKey(editingSeries, household.timeZone)),
+            )}
+            tone="brand"
+          />
+        )}
+      </ConfirmDialog>
     </CalendarContext.Provider>
   );
 }
@@ -152,11 +269,22 @@ function useCalendarWriter(): {
       },
       update(event, changes) {
         if (Object.keys(changes).length === 0) return;
-        report(updateEvent(householdId, event.id, changes), event.id, "edit");
+        // Phase 9 B12: a new rule, start or times reset the single-occurrence changes.
+        const write =
+          event.exceptions !== undefined && clearsExceptions(changes)
+            ? updateEvent(householdId, event.id, changes, { clearExceptions: true })
+            : updateEvent(householdId, event.id, changes);
+        report(write, event.id, "edit");
       },
       remove(event) {
         deleted.current.add(event.id);
         report(deleteEvent(householdId, event.id), event.id, "delete");
+      },
+      cancelOccurrence(event, dateKey) {
+        report(cancelOccurrence(householdId, event.id, dateKey), event.id, "edit");
+      },
+      editOccurrence(event, dateKey, override) {
+        report(editOccurrence(householdId, event.id, dateKey, override), event.id, "edit");
       },
     }),
     [householdId, uid, report],
@@ -176,7 +304,7 @@ function EventSheet({
 }: {
   state: SheetState | null;
   onClose: () => void;
-  onDelete: (event: CalendarEvent) => void;
+  onDelete: (event: CalendarEvent, occurrence?: EventOccurrence) => void;
 }) {
   const { household, members, events } = useLoadedHousehold();
   const { actions } = useCalendar();
@@ -185,17 +313,32 @@ function EventSheet({
   const formId = useId();
   const timeZone = household.timeZone;
 
-  const editId = state?.mode === "edit" ? state.eventId : undefined;
+  const editId = state && state.mode !== "new" ? state.eventId : undefined;
   const event = editId ? events.find((candidate) => candidate.id === editId) : undefined;
+  // Phase 9 D93: one occurrence of a series (null once it's cancelled elsewhere).
+  const dateKey = state?.mode === "occurrence" ? state.dateKey : undefined;
+  const occurrence = event && dateKey ? occurrenceOn(event, dateKey, timeZone) : undefined;
   const options = state?.mode === "new" ? state.options : {};
-  // The event as it was when the sheet opened: the base for «only changed fields».
-  const [original] = useState(event);
+  // What the sheet edits, as it was when it opened: the base for «only changed fields». For one
+  // occurrence, the occurrence as a one-off event (its times, its own fields, no rule).
+  const [original] = useState(
+    occurrence
+      ? {
+          ...occurrence.event,
+          start: occurrence.start,
+          end: occurrence.end,
+          recurrence: undefined,
+          exceptions: undefined,
+        }
+      : event,
+  );
   const [values, setValues] = useState<EventFormValues>(() =>
-    initialEventFormValues(event, options.prefill ?? {}, { now: new Date(), timeZone }),
+    initialEventFormValues(original, options.prefill ?? {}, { now: new Date(), timeZone }),
   );
   const [submitted, setSubmitted] = useState(false);
 
-  const vanished = editId !== undefined && !event;
+  // Deleted elsewhere, or (one occurrence) cancelled elsewhere.
+  const vanished = editId !== undefined && (!event || (dateKey !== undefined && !occurrence));
   useEffect(() => {
     if (!vanished) return;
     toast.show({ message: calendarCopy.deletedElsewhere, tone: "info" });
@@ -212,7 +355,8 @@ function EventSheet({
     times: problems.times,
     until: problems.until,
   };
-  const editing = state?.mode === "edit" || (state === null && original !== undefined);
+  const editing =
+    (state !== null && state.mode !== "new") || (state === null && original !== undefined);
   const changes = original ? eventChanges(original, values, timeZone, members, weekStartsOn) : {};
   const canSave =
     !problems.times &&
@@ -224,7 +368,12 @@ function EventSheet({
   function submit() {
     setSubmitted(true);
     if (problems.title || problems.times || problems.description || problems.until) return;
-    if (editing) {
+    if (editing && dateKey !== undefined) {
+      if (event) {
+        const input = eventInput(values, timeZone, members, weekStartsOn);
+        actions.editOccurrence(event, dateKey, overrideFor(event, input));
+      }
+    } else if (editing) {
       if (event && original) actions.update(event, changes);
     } else {
       actions.create(eventInput(values, timeZone, members, weekStartsOn));
@@ -248,7 +397,7 @@ function EventSheet({
                 variant="danger-ghost"
                 size="compact"
                 icon={TrashIcon}
-                onClick={() => onDelete(event)}
+                onClick={() => onDelete(event, occurrence ?? undefined)}
                 className="mr-auto"
               >
                 {calendarCopy.deleteEvent}
@@ -281,9 +430,13 @@ function EventSheet({
             ? formatDate(fromDateKey(eventStartKey(original, timeZone)), "UTC")
             : undefined
         }
+        singleDate={occurrence ? dayLabel(occurrence.date) : undefined}
+        resetNote={original?.exceptions !== undefined && clearsExceptions(changes)}
         focus={options.focus ?? "title"}
         onSubmit={submit}
-        onDelete={!desktop && editing && event ? () => onDelete(event) : undefined}
+        onDelete={
+          !desktop && editing && event ? () => onDelete(event, occurrence ?? undefined) : undefined
+        }
       />
     </Sheet>
   );

@@ -5,16 +5,20 @@ import {
   doc,
   getDoc,
   getDocs,
+  serverTimestamp,
   setDoc,
   updateDoc,
   waitForPendingWrites,
+  writeBatch,
   type Firestore,
+  type FirestoreDataConverter,
 } from "firebase/firestore";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CalendarEvent,
   Household,
   ItemStat,
+  Member,
   ShoppingItem,
   Task,
   UserProfile,
@@ -41,12 +45,19 @@ vi.mock("../../lib/firebase", () => ({
   },
 }));
 
-const { createHousehold, updateHouseholdSettings } =
-  await import("../../services/householdService");
+const {
+  createHousehold,
+  deleteHousehold,
+  handOverHousehold,
+  leaveHousehold,
+  removeMember,
+  updateHouseholdSettings,
+} = await import("../../services/householdService");
 const { getInvite, joinHousehold, regenerateInvite } = await import("../../services/inviteService");
 const { updateMyProfile } = await import("../../services/memberService");
 const { householdConverter } = await import("../../lib/converters/householdConverter");
-const { listenToUserProfile } = await import("../../services/userService");
+const { clearStaleHousehold, listenToUserProfile } = await import("../../services/userService");
+const { memberConverter } = await import("../../lib/converters/memberConverter");
 const { nextConfirmedHouseholdId } = await import("../../lib/auth/confirmedHouseholdId");
 const {
   completeTask,
@@ -68,7 +79,7 @@ const {
   restoreItems,
   uncheckItem,
 } = await import("../../services/shoppingService");
-const { createEvent, deleteEvent, listenToEvents, updateEvent } =
+const { cancelOccurrence, createEvent, deleteEvent, editOccurrence, listenToEvents, updateEvent } =
   await import("../../services/eventService");
 const { listenToActivity, loadOlderActivity } = await import("../../services/activityService");
 const { mergeFeed } = await import("../../domain/activity");
@@ -709,7 +720,7 @@ describe("event services against the rules (Phase 6)", () => {
     ]);
   });
 
-  it("an edit that still lists a former member is denied; normalized participants pass (B5)", async () => {
+  it("an edit that keeps a former member passes (Phase 9 B19); normalized participants pass (B5)", async () => {
     await asAdmin(env, async (db) => {
       const now = new Date();
       await setDoc(doc(db, "households", hid, "events", "doctor"), {
@@ -725,7 +736,7 @@ describe("event services against the rules (Phase 6)", () => {
       });
     });
     signInAs(nevio);
-    await expect(updateEvent(hid, "doctor", { title: "Arzt" })).rejects.toThrow();
+    await expect(updateEvent(hid, "doctor", { title: "Arzt" })).resolves.toBeUndefined();
     // normalizeParticipants only reads the uids.
     const members = [{ uid: "nevio" }, { uid: "anna" }] as unknown as Parameters<
       typeof normalizeParticipants
@@ -825,5 +836,240 @@ describe("activity feed services against the rules (Phase 8)", () => {
     } finally {
       live.stop();
     }
+  });
+});
+
+describe("household lifecycle services against the rules (Phase 9)", () => {
+  const hid = "h1";
+  const weeklySat = { freq: "weekly" as const, interval: 1, byWeekday: [6] };
+
+  async function readAll<T>(name: string, converter?: FirestoreDataConverter<T>): Promise<T[]> {
+    let docs: T[] = [];
+    await asAdmin(env, async (db) => {
+      const ref = collection(db, "households", hid, name);
+      const snapshot = converter ? await getDocs(ref.withConverter(converter)) : await getDocs(ref);
+      docs = snapshot.docs.map((d) => d.data() as T);
+    });
+    return docs;
+  }
+
+  async function memberOf(uid: string): Promise<Member> {
+    const members = await readAll("members", memberConverter);
+    const member = members.find((m) => m.uid === uid);
+    if (!member) throw new Error(`member ${uid} missing`);
+    return member;
+  }
+
+  async function seedTasks(tasks: Record<string, Record<string, unknown>>) {
+    await asAdmin(env, async (db) => {
+      const now = new Date();
+      for (const [id, fields] of Object.entries(tasks)) {
+        await setDoc(doc(db, "households", hid, "tasks", id), {
+          title: id,
+          assigneeId: null,
+          dueDate: "2026-10-03",
+          priority: "low",
+          status: "open",
+          createdBy: "nevio",
+          createdAt: now,
+          updatedAt: now,
+          ...fields,
+        });
+      }
+    });
+  }
+
+  beforeEach(async () => {
+    await seedHousehold(env, { members: [anna, lea] });
+    await seedTasks({
+      mine: { assigneeId: "anna" },
+      rotating: {
+        assigneeId: "anna",
+        recurrence: weeklySat,
+        seriesId: "rotating",
+        seriesIndex: 1,
+        rotation: { memberIds: ["nevio", "anna", "lea"], index: 1 },
+      },
+      done: { assigneeId: "anna", status: "done", completedAt: new Date(), completedBy: "anna" },
+    });
+  });
+
+  it("leaves: out of the household, tasks cleaned up, count −1, one entry (B2, B3)", async () => {
+    const household = await readHousehold(hid);
+    const tasks = await readAll("tasks", taskConverter);
+    signInAs(anna);
+    await leaveHousehold(household, await memberOf("anna"), tasks);
+
+    expect((await readHousehold(hid)).memberIds).toEqual(["nevio", "lea"]);
+    expect(await adminData(`households/${hid}/members/anna`)).toBeUndefined();
+    expect((await adminData("users/anna"))?.householdId).toBeNull();
+    expect((await adminData("invites/MST-4821"))?.memberCount).toBe(2);
+    const after = Object.fromEntries(
+      (await readAll("tasks", taskConverter)).map((task) => [task.id, task]),
+    );
+    expect(after.mine.assigneeId).toBeNull();
+    expect(after.rotating).toMatchObject({
+      assigneeId: "lea",
+      rotation: { memberIds: ["nevio", "lea"], index: 1 },
+    });
+    expect(after.done.assigneeId).toBe("anna");
+    expect(await readAll<Record<string, unknown>>("activity")).toEqual([
+      expect.objectContaining({ type: "member_left", targetId: "anna", targetTitle: "Anna" }),
+    ]);
+  });
+
+  it("removes a member, who then heals their own profile (B4, B6)", async () => {
+    const household = await readHousehold(hid);
+    const tasks = await readAll("tasks", taskConverter);
+    signInAs(nevio);
+    await removeMember(household, "nevio", await memberOf("anna"), tasks);
+
+    expect((await readHousehold(hid)).memberIds).toEqual(["nevio", "lea"]);
+    expect((await adminData("invites/MST-4821"))?.memberCount).toBe(2);
+    expect(await readAll<Record<string, unknown>>("activity")).toEqual([
+      expect.objectContaining({ type: "member_removed", actorId: "nevio", targetId: "anna" }),
+    ]);
+    // Still pointing at the household until Anna's app heals it.
+    expect((await adminData("users/anna"))?.householdId).toBe(hid);
+    signInAs(anna);
+    expect(await clearStaleHousehold("anna", hid)).toBe(true);
+    expect((await adminData("users/anna"))?.householdId).toBeNull();
+    expect(await clearStaleHousehold("anna", hid)).toBe(false);
+    // Lea is still a member: the rules reject her clear.
+    signInAs(lea);
+    await expect(clearStaleHousehold("lea", hid)).rejects.toThrow();
+  });
+
+  it("hands over: the new owner changes settings, the old one can't (B5)", async () => {
+    signInAs(nevio);
+    await handOverHousehold(await readHousehold(hid), "nevio", await memberOf("anna"));
+    expect((await readHousehold(hid)).ownerId).toBe("anna");
+    expect((await memberOf("anna")).role).toBe("owner");
+    expect((await memberOf("nevio")).role).toBe("member");
+    expect((await adminData("invites/MST-4821"))?.ownerName).toBe("Anna");
+    signInAs(anna);
+    await updateHouseholdSettings(await readHousehold(hid), { weekStartsOn: 0 });
+    signInAs(nevio);
+    await expect(
+      updateHouseholdSettings(await readHousehold(hid), { weekStartsOn: 1 }),
+    ).rejects.toThrow();
+  });
+
+  it("deletes everything in chunks, also more than 500 documents (B7)", async () => {
+    await asAdmin(env, async (db) => {
+      const now = new Date();
+      for (let start = 0; start < 520; start += 260) {
+        const batch = writeBatch(db);
+        for (let i = start; i < start + 260; i++) {
+          batch.set(doc(db, "households", hid, "tasks", `bulk${i}`), {
+            title: `Aufgabe ${i}`,
+            assigneeId: null,
+            dueDate: null,
+            priority: "low",
+            status: "open",
+            createdBy: "nevio",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        await batch.commit();
+      }
+      await setDoc(doc(db, "households", hid, "itemStats", "milch"), {
+        name: "Milch",
+        category: "groceries",
+        count: 4,
+        lastPurchasedAt: now,
+      });
+      await setDoc(doc(db, "households", hid, "activity", "a1"), {
+        actorId: "anna",
+        type: "member_joined",
+        targetType: "member",
+        targetId: "anna",
+        targetTitle: "Anna",
+        createdAt: now,
+      });
+    });
+    signInAs(nevio);
+    await deleteHousehold(await readHousehold(hid), "nevio");
+
+    expect(await adminData(`households/${hid}`)).toBeUndefined();
+    for (const name of ["tasks", "itemStats", "activity", "members"]) {
+      expect(await readAll(name)).toEqual([]);
+    }
+    expect(await adminData("invites/MST-4821")).toBeUndefined();
+    expect((await adminData("users/nevio"))?.householdId).toBeNull();
+    signInAs(anna);
+    expect(await clearStaleHousehold("anna", hid)).toBe(true);
+  });
+
+  it("resumes an interrupted delete (B7, D89)", async () => {
+    const db = signInAs(nevio);
+    // Step 1 went through, then the app closed.
+    await updateDoc(doc(db, "households", hid), {
+      deleting: true,
+      memberIds: ["nevio"],
+      updatedAt: serverTimestamp(),
+    });
+    const household = await readHousehold(hid);
+    expect(household.deleting).toBe(true);
+    await deleteHousehold(household, "nevio");
+    expect(await adminData(`households/${hid}`)).toBeUndefined();
+    expect(await readAll("tasks")).toEqual([]);
+  });
+
+  it("keeps the join lookup working with the tighter invite rule (C7)", async () => {
+    await asAdmin(env, (db) => setDoc(doc(db, "users", "lea"), profileOf(lea, null as never)));
+    signInAs(lea);
+    expect(await getInvite("MST-4821")).toMatchObject({ householdId: hid });
+  });
+});
+
+describe("single occurrence services against the rules (Phase 9 REV-07)", () => {
+  const hid = "h1";
+
+  beforeEach(async () => {
+    await seedHousehold(env, { members: [anna] });
+    await asAdmin(env, async (db) => {
+      const now = new Date();
+      await setDoc(doc(db, "households", hid, "events", "cleaning"), {
+        title: "Grossputz",
+        category: "home",
+        allDay: false,
+        start: new Date("2026-09-19T08:00:00Z"),
+        end: new Date("2026-09-19T10:00:00Z"),
+        participants: "household",
+        recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
+        createdBy: "nevio",
+        createdAt: now,
+        updatedAt: now,
+      });
+    });
+  });
+
+  it("cancels and changes occurrences, and a schedule change clears them (B10, B12)", async () => {
+    signInAs(anna);
+    await cancelOccurrence(hid, "cleaning", "2026-10-03");
+    await editOccurrence(hid, "cleaning", "2026-10-17", {
+      start: new Date("2026-10-18T12:00:00Z"),
+      end: new Date("2026-10-18T14:00:00Z"),
+      title: " Fensterputz ",
+      participants: ["anna"],
+    });
+    let stored = await adminData(`households/${hid}/events/cleaning`);
+    expect(stored?.lastExceptionKey).toBe("2026-10-17");
+    expect(stored?.exceptions).toMatchObject({
+      "2026-10-03": { cancelled: true },
+      "2026-10-17": { title: "Fensterputz", participants: ["anna"] },
+    });
+
+    await updateEvent(
+      hid,
+      "cleaning",
+      { recurrence: { freq: "weekly", interval: 1, byWeekday: [6] } },
+      { clearExceptions: true },
+    );
+    stored = await adminData(`households/${hid}/events/cleaning`);
+    expect(stored?.exceptions).toBeUndefined();
+    expect(stored?.lastExceptionKey).toBeUndefined();
   });
 });

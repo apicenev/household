@@ -21,6 +21,7 @@
     "test:rules": "firebase emulators:exec --only firestore --project demo-household \"vitest run --config vitest.rules.config.ts\"",
     "emulators": "firebase emulators:start --project demo-household --import=./emulator-data --export-on-exit",
     "seed": "tsx scripts/seed-emulator.ts",
+    "demo:setup": "tsx scripts/demo/setupDemo.ts",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes"
   },
   "dependencies": {

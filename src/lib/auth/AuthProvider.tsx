@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { ensureUserProfile, listenToUserProfile } from "../../services/userService";
 import type { UserProfile } from "../../types";
 import { auth } from "../firebase";
+import { clearHouseholdEnded } from "../household/householdEnded";
 import { nextConfirmedHouseholdId } from "./confirmedHouseholdId";
 import { AuthContext, type AuthContextValue, type AuthUser } from "./useAuth";
 
@@ -96,6 +97,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    clearHouseholdEnded();
     run.current += 1;
     stopListeners();
     setState((current) => ({ ...current, profile: null, confirmedHouseholdId: undefined }));

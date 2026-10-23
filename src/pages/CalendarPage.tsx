@@ -40,7 +40,7 @@ import { useToday } from "../hooks/useToday";
 import { actions as actionLabels, areas, calendarCopy } from "../lib/copy";
 import { formatMonthYear } from "../lib/format";
 import { useLoadedHousehold } from "../lib/household/useHousehold";
-import type { CalendarEvent, EventCategory, EventOccurrence } from "../types";
+import type { EventCategory, EventOccurrence } from "../types";
 
 const LEGEND = Object.keys(eventCategories) as EventCategory[];
 
@@ -150,12 +150,13 @@ export default function CalendarPage() {
     else closeDetail();
   }
 
-  function remove(event: CalendarEvent) {
-    calendar.confirmDelete(event, leaveDeleted);
+  // Phase 9 D92: an occurrence of a series asks «Nur diesen Termin / Ganze Serie» first.
+  function remove(occurrence: EventOccurrence) {
+    calendar.confirmDelete(occurrence.event, leaveDeleted, occurrence);
   }
 
-  function edit(event: CalendarEvent) {
-    calendar.openEditEvent(event.id, leaveDeleted);
+  function edit(occurrence: EventOccurrence) {
+    calendar.editOccurrence(occurrence, leaveDeleted);
   }
 
   if (!desktop && eventId && (linkedOccurrence || eventsLoading)) {
@@ -170,10 +171,10 @@ export default function CalendarPage() {
         members={members}
         onBack={closeDetail}
         headerAction={
-          linked && (
+          linkedOccurrence && (
             <button
               type="button"
-              onClick={() => edit(linked)}
+              onClick={() => edit(linkedOccurrence)}
               className="flex h-11 cursor-pointer items-center rounded-control px-3 text-body font-semibold text-brand-strong hovered:bg-brand-soft"
             >
               {actionLabels.edit}
@@ -181,13 +182,13 @@ export default function CalendarPage() {
           )
         }
         footer={
-          linked && (
+          linkedOccurrence && (
             <div className="sticky bottom-0 mt-auto flex gap-2 border-t border-line bg-canvas px-4 pt-3 pb-[calc(env(safe-area-inset-bottom)+--spacing(3))]">
               <Button
                 variant="secondary"
                 size="lg"
                 icon={Pencil20}
-                onClick={() => edit(linked)}
+                onClick={() => edit(linkedOccurrence)}
                 className="flex-1"
               >
                 {actionLabels.edit}
@@ -196,7 +197,7 @@ export default function CalendarPage() {
                 variant="danger-ghost"
                 size="lg"
                 icon={Trash20}
-                onClick={() => remove(linked)}
+                onClick={() => remove(linkedOccurrence)}
                 className="flex-1"
               >
                 {actionLabels.delete}
@@ -312,7 +313,7 @@ export default function CalendarPage() {
                   variant="secondary"
                   size="sm"
                   icon={PencilIcon}
-                  onClick={() => edit(occurrence.event)}
+                  onClick={() => edit(occurrence)}
                 >
                   {actionLabels.edit}
                 </Button>
@@ -320,7 +321,7 @@ export default function CalendarPage() {
                   variant="danger-ghost"
                   size="sm"
                   icon={TrashIcon}
-                  onClick={() => remove(occurrence.event)}
+                  onClick={() => remove(occurrence)}
                 >
                   {actionLabels.delete}
                 </Button>

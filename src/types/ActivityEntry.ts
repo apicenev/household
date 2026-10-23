@@ -1,6 +1,8 @@
 /** Kinds of activity entries (ACT-01). */
 export type ActivityType =
   | "member_joined"
+  | "member_left"
+  | "member_removed"
   | "task_created"
   | "task_completed"
   | "task_assigned"
