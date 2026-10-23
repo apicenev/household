@@ -103,6 +103,8 @@ function entry(
     item_purchased: "item",
     event_created: "event",
     member_joined: "member",
+    member_left: "member",
+    member_removed: "member",
   };
   return {
     id: `a${String(seq).padStart(3, "0")}`,

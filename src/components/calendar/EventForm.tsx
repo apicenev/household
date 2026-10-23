@@ -55,6 +55,13 @@ interface EventFormProps {
   weekStartsOn: WeekStart;
   /** Editing a series (Phase 7 D61): its first occurrence, «Sa., 19. Sept.», for the hint. */
   seriesSince?: string;
+  /**
+   * Editing one occurrence of a series (Phase 9 D93): its date, «Sa., 10. Okt.», for the hint;
+   * «Ganztägig» and «Wiederholen» are hidden (they stay the series' own).
+   */
+  singleDate?: string;
+  /** D95: this series edit resets the single-occurrence changes. */
+  resetNote?: boolean;
   focus: EventFormFocus;
   onSubmit: () => void;
   /** Phones, edit only: «Termin löschen» at the end of the form (desktop: in the footer). */
@@ -77,6 +84,8 @@ export function EventForm({
   timeZone,
   weekStartsOn,
   seriesSince,
+  singleDate,
+  resetNote = false,
   focus,
   onSubmit,
   onDelete,
@@ -112,6 +121,9 @@ export function EventForm({
       className="flex flex-col gap-4.5"
     >
       {seriesSince && <InlineAlert tone="info">{calendarCopy.seriesHint(seriesSince)}</InlineAlert>}
+      {singleDate && (
+        <InlineAlert tone="info">{calendarCopy.single.sheetHint(singleDate)}</InlineAlert>
+      )}
       <TextField
         label={calendarCopy.title}
         value={values.title}
@@ -133,17 +145,19 @@ export function EventForm({
 
       <div className="flex flex-col gap-1.5">
         <div className="overflow-hidden rounded-control inset-ring inset-ring-line-strong">
-          <Toggle
-            checked={values.allDay}
-            onChange={(allDay) => onChange(withAllDay(values, allDay))}
-            label={
-              <span className="flex items-center gap-3">
-                <SunIcon aria-hidden="true" className="size-6 text-ink-muted" />
-                {calendarCopy.allDay}
-              </span>
-            }
-            className="pr-3 pl-3.5"
-          />
+          {!singleDate && (
+            <Toggle
+              checked={values.allDay}
+              onChange={(allDay) => onChange(withAllDay(values, allDay))}
+              label={
+                <span className="flex items-center gap-3">
+                  <SunIcon aria-hidden="true" className="size-6 text-ink-muted" />
+                  {calendarCopy.allDay}
+                </span>
+              }
+              className="pr-3 pl-3.5"
+            />
+          )}
           {row(
             calendarCopy.start,
             <DatePill
@@ -246,14 +260,20 @@ export function EventForm({
         error={errors.description ? errorText[errors.description] : undefined}
       />
 
-      <RecurrencePicker
-        mode="event"
-        value={values.repeat}
-        onChange={(repeat) => onChange({ ...values, repeat })}
-        dueDate={values.startKey}
-        weekStartsOn={weekStartsOn}
-        untilError={errors.until ? errorText[errors.until] : undefined}
-      />
+      {!singleDate && (
+        <RecurrencePicker
+          mode="event"
+          value={values.repeat}
+          onChange={(repeat) => onChange({ ...values, repeat })}
+          dueDate={values.startKey}
+          weekStartsOn={weekStartsOn}
+          untilError={errors.until ? errorText[errors.until] : undefined}
+        />
+      )}
+
+      {resetNote && (
+        <p className="text-[13px] leading-[18px] text-ink-muted">{calendarCopy.single.resetNote}</p>
+      )}
 
       {onDelete && (
         <Button variant="danger-ghost" size="md" icon={TrashIcon} onClick={onDelete}>

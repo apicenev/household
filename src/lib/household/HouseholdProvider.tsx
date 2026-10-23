@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { isOwner, sortMembers } from "../../domain/household";
+import { firestoreErrorCode } from "../firestoreErrors";
 import { listenToEvents } from "../../services/eventService";
 import { listenToHousehold } from "../../services/householdService";
 import { listenToMembers } from "../../services/memberService";
 import { listenToItems, listenToItemStats } from "../../services/shoppingService";
 import { listenToTasks } from "../../services/taskService";
+import { clearStaleHousehold } from "../../services/userService";
 import type { CalendarEvent, Household, ItemStat, Member, ShoppingItem, Task } from "../../types";
+import { markHouseholdEnded } from "./householdEnded";
 import { HouseholdContext, type HouseholdContextValue } from "./useHousehold";
 
 interface Snapshot {
@@ -13,6 +16,8 @@ interface Snapshot {
   householdLoaded: boolean;
   members: Member[];
   membersLoaded: boolean;
+  /** The member is out (removed, household deleted); waiting for the redirect (B6). */
+  ending: boolean;
   error: Error | null;
 }
 
@@ -21,6 +26,7 @@ const initial: Snapshot = {
   householdLoaded: false,
   members: [],
   membersLoaded: false,
+  ending: false,
   error: null,
 };
 
@@ -57,6 +63,11 @@ const initialEvents: EventsSnapshot = { events: [], loaded: false, error: null }
  * shopping list (Phase 5 D38, D39) and the calendar (Phase 6 D49, D50; all events, B10). A
  * failing itemStats listener only means no suggestions, so its error is ignored. The activity
  * feed has its own listener on /activity (Phase 8 B1), so app start doesn't read it.
+ *
+ * Self-heal (Phase 9 B6): when the server says the household is gone or no longer readable
+ * (`permission-denied`), the profile's householdId is cleared, which sends the member to
+ * onboarding with the D88 notice. Until then the App-Start screen shows; if the clear is
+ * rejected (still a member, a real error), the D8 error state.
  */
 export function HouseholdProvider({
   householdId,
@@ -78,17 +89,30 @@ export function HouseholdProvider({
   const [eventsAttempt, setEventsAttempt] = useState(0);
 
   useEffect(() => {
+    let ending = false;
     const fail = (error: Error) => setSnapshot((current) => ({ ...current, error }));
+    const end = () => {
+      if (ending) return;
+      ending = true;
+      setSnapshot((current) => ({ ...current, ending: true }));
+      clearStaleHousehold(uid, householdId)
+        .then((cleared) => {
+          if (cleared) markHouseholdEnded();
+        })
+        .catch((error: Error) => setSnapshot((current) => ({ ...current, ending: false, error })));
+    };
+    const failOrEnd = (error: Error) =>
+      firestoreErrorCode(error) === "permission-denied" ? end() : fail(error);
     const unsubscribeHousehold = listenToHousehold(
       householdId,
       (household) => {
         if (!household) {
-          fail(new Error(`Household ${householdId} doesn't exist.`));
+          end();
           return;
         }
         setSnapshot((current) => ({ ...current, household, householdLoaded: true }));
       },
-      fail,
+      failOrEnd,
     );
     const unsubscribeMembers = listenToMembers(
       householdId,
@@ -98,13 +122,13 @@ export function HouseholdProvider({
           members: sortMembers(members),
           membersLoaded: true,
         })),
-      fail,
+      failOrEnd,
     );
     return () => {
       unsubscribeHousehold();
       unsubscribeMembers();
     };
-  }, [householdId, attempt]);
+  }, [householdId, uid, attempt]);
 
   useEffect(
     () =>
@@ -170,7 +194,7 @@ export function HouseholdProvider({
       me: byId.get(uid) ?? null,
       isOwner: household !== null && isOwner(household, uid),
       memberById: (memberId) => byId.get(memberId),
-      loading: !error && !(snapshot.householdLoaded && snapshot.membersLoaded),
+      loading: !error && (snapshot.ending || !(snapshot.householdLoaded && snapshot.membersLoaded)),
       error,
       retry,
       tasks: tasksSnapshot.tasks,

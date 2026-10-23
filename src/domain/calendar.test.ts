@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import {
   addMonths,
+  clearsExceptions,
   allDayLength,
   barLane,
   compareOccurrences,
@@ -25,6 +26,7 @@ import {
   occurrenceKey,
   occurrencesInRange,
   occurrenceTimes,
+  overrideFor,
   parseDayParam,
   parseMonthParam,
   parseViewParam,
@@ -391,6 +393,10 @@ describe("participants (B5, D58)", () => {
     });
   });
 
+  it("a list of former members only shows as «Alle» (Phase 9 B19)", () => {
+    expect(visibleParticipants(["gone"], members)).toEqual({ everyone: true, members });
+  });
+
   it("normalizes what gets saved", () => {
     expect(normalizeParticipants(["anna"], members)).toEqual(["anna"]);
     expect(normalizeParticipants(["anna", "gone", "anna"], members)).toEqual(["anna"]);
@@ -618,5 +624,140 @@ describe("resolveOccurrenceParam (B9)", () => {
   it("ignores a date on one-off events and returns null for unknown ids", () => {
     expect(resolve(`${dinner.id}@2026-10-05`)).toEqual(singleOccurrence(dinner, ZURICH));
     expect(resolve("missing")).toBeNull();
+  });
+});
+
+// Phase 9: single occurrences (REV-07, B10–B12, D94).
+describe("exceptions of a series (REV-07)", () => {
+  // «Grossputz» every 2 weeks on Saturday from Sa 19 Sept, 10:00–12:00: 3, 17, 31 Oct.
+  const cleaning = (exceptions: CalendarEvent["exceptions"], rule = everyOtherSat) =>
+    timed("2026-09-19", "10:00", "12:00", { title: "Grossputz", recurrence: rule, exceptions });
+  const inOctober = (e: CalendarEvent) =>
+    occurrencesInRange([e], "2026-10-01", "2026-10-31", ZURICH, 1);
+  const moved = (day: string, from: string, to: string) => ({
+    start: zonedToInstant(day, from, ZURICH),
+    end: zonedToInstant(day, to, ZURICH),
+  });
+
+  it("drops a cancelled date everywhere: range, next dates, links", () => {
+    const e = cleaning({ "2026-10-17": { cancelled: true } });
+    expect(inOctober(e).map((o) => o.date)).toEqual(["2026-10-03", "2026-10-31"]);
+    expect(nextOccurrences(e, "2026-10-03", 2, ZURICH, 1).map((o) => o.date)).toEqual([
+      "2026-10-31",
+      "2026-11-14",
+    ]);
+    // The link of the cancelled date falls back to the next occurrence from today.
+    expect(resolveOccurrenceParam(`${e.id}@2026-10-17`, [e], "2026-10-05", ZURICH, 1)?.date).toBe(
+      "2026-10-31",
+    );
+  });
+
+  it("shows a changed occurrence at its new time with its own fields, keyed by its schedule date", () => {
+    const e = cleaning({
+      "2026-10-17": { ...moved("2026-10-18", "14:00", "16:00"), title: "Fensterputz" },
+    });
+    const october = inOctober(e);
+    const changed = october.find((o) => o.changed);
+    expect(changed).toMatchObject({
+      key: occurrenceKey(e.id, "2026-10-17"),
+      date: "2026-10-18",
+      seriesDate: "2026-10-17",
+      changed: true,
+    });
+    expect(changed?.event).toMatchObject({
+      id: e.id,
+      title: "Fensterputz",
+      recurrence: e.recurrence,
+    });
+    // The stored series is untouched: its start stays the anchor.
+    expect(changed?.event.start).toEqual(e.start);
+    expect(local(changed!)).toBe("2026-10-18 14:00–16:00 2026-10-18");
+    expect(october.map((o) => o.date)).toEqual(["2026-10-03", "2026-10-31", "2026-10-18"]);
+    expect(resolveOccurrenceParam(changed!.key, [e], "2026-10-05", ZURICH, 1)).toEqual(changed);
+  });
+
+  it("finds an occurrence moved into or out of the range", () => {
+    const intoOctober = cleaning({ "2026-11-14": moved("2026-10-30", "18:00", "19:00") });
+    expect(inOctober(intoOctober).map((o) => o.date)).toContain("2026-10-30");
+    const outOfOctober = cleaning({ "2026-10-31": moved("2026-11-02", "18:00", "19:00") });
+    expect(inOctober(outOfOctober).map((o) => o.date)).toEqual(["2026-10-03", "2026-10-17"]);
+  });
+
+  it("keeps an override's own times across a DST change", () => {
+    // Clocks go back on Sun 25 Oct 2026; the override on 31 Oct keeps 09:00 local.
+    const e = cleaning({ "2026-10-31": moved("2026-10-31", "09:00", "10:00") });
+    const last = inOctober(e).find((o) => o.seriesDate === "2026-10-31");
+    expect(local(last!)).toBe("2026-10-31 09:00–10:00 2026-10-31");
+  });
+
+  it("counts cancelled occurrences towards «Nach N Mal»", () => {
+    const e = cleaning({ "2026-10-03": { cancelled: true } }, { ...everyOtherSat, count: 3 });
+    const all = occurrencesInRange([e], "2026-09-01", "2026-12-31", ZURICH, 1);
+    expect(all.map((o) => o.date)).toEqual(["2026-09-19", "2026-10-17"]);
+  });
+
+  it("ends «Endete am …» on the last occurrence that takes place", () => {
+    const rule = { ...everyOtherSat, until: "2026-10-31" };
+    expect(seriesBounds(cleaning(undefined, rule), ZURICH, 1)).toEqual({
+      first: "2026-09-19",
+      last: "2026-10-31",
+    });
+    expect(seriesBounds(cleaning({ "2026-10-31": { cancelled: true } }, rule), ZURICH, 1)).toEqual({
+      first: "2026-09-19",
+      last: "2026-10-17",
+    });
+    expect(
+      seriesBounds(
+        cleaning({ "2026-10-31": moved("2026-11-01", "10:00", "12:00") }, rule),
+        ZURICH,
+        1,
+      ),
+    ).toEqual({ first: "2026-09-19", last: "2026-11-01" });
+  });
+
+  it("puts a moved occurrence into a trip by its new day (D65)", () => {
+    const e = cleaning({ "2026-10-17": moved("2026-10-22", "10:00", "12:00") });
+    const trip = allDay("2026-10-20", "2026-10-25", { category: "travel" });
+    const occurrences = occurrencesInRange([e, trip], "2026-10-01", "2026-10-31", ZURICH, 1);
+    const changed = occurrences.find((o) => o.changed)!;
+    expect(duringTrip(changed, occurrences)).toBe(true);
+  });
+
+  it("builds an override from the sheet's values: times plus what differs (B10)", () => {
+    const series = cleaning(undefined);
+    const times = moved("2026-10-18", "14:00", "16:00");
+    expect(
+      overrideFor(series, {
+        ...times,
+        title: series.title,
+        description: undefined,
+        category: series.category,
+        participants: "household",
+      }),
+    ).toEqual(times);
+    expect(
+      overrideFor(series, {
+        ...times,
+        title: "Fensterputz",
+        description: "Mit Leiter",
+        category: "home",
+        participants: ["anna"],
+      }),
+    ).toEqual({
+      ...times,
+      title: "Fensterputz",
+      description: "Mit Leiter",
+      category: "home",
+      participants: ["anna"],
+    });
+  });
+
+  it("knows which series edits reset the exceptions (B12, D95)", () => {
+    expect(clearsExceptions({ title: "Neu" })).toBe(false);
+    expect(clearsExceptions({ participants: ["anna"], category: "home" })).toBe(false);
+    expect(clearsExceptions({ recurrence: null })).toBe(true);
+    expect(clearsExceptions({ start: new Date() })).toBe(true);
+    expect(clearsExceptions({ end: new Date() })).toBe(true);
+    expect(clearsExceptions({ allDay: true })).toBe(true);
   });
 });

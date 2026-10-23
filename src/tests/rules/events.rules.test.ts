@@ -4,6 +4,7 @@ import {
   type RulesTestEnvironment,
 } from "@firebase/rules-unit-testing";
 import {
+  FieldPath,
   Timestamp,
   collection,
   deleteDoc,
@@ -17,7 +18,7 @@ import {
   writeBatch,
   type Firestore,
 } from "firebase/firestore";
-import { afterAll, beforeAll, beforeEach, describe, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   DAY_MS,
   HID,
@@ -267,15 +268,20 @@ describe("events: update and delete", () => {
     await assertFails(updateDoc(doc(db, ...eventPath()), { title: "Ohne Zeit" }));
   });
 
-  it("checks the whole event: an edit that still lists a former member is denied (B5)", async () => {
+  it("checks participants only when they change: a former member stays editable (Phase 9 B19)", async () => {
     await seedEvent("e1", { participants: [anna.uid, "gone"] });
     const db = dbAs(env, nevio);
-    await assertFails(
+    await assertSucceeds(
       updateDoc(doc(db, ...eventPath()), { title: "Arzt", updatedAt: serverTimestamp() }),
+    );
+    await assertFails(
+      updateDoc(doc(db, ...eventPath()), {
+        participants: [nevio.uid, "gone"],
+        updatedAt: serverTimestamp(),
+      }),
     );
     await assertSucceeds(
       updateDoc(doc(db, ...eventPath()), {
-        title: "Arzt",
         participants: [anna.uid],
         updatedAt: serverTimestamp(),
       }),
@@ -404,6 +410,137 @@ describe("events: recurrence (Phase 7 B1)", () => {
   it("creating a series writes one «event_created»", async () => {
     await assertSucceeds(
       createBatch(dbAs(env, nevio), nevio, { event: { recurrence: everyOtherSat } }).commit(),
+    );
+  });
+});
+
+// Phase 9 B10–B12: single occurrences of a series (REV-07).
+describe("exceptions (REV-07)", () => {
+  const weekly = { freq: "weekly", interval: 1, byWeekday: [2] };
+
+  /** One exception write as eventService.cancelOccurrence / editOccurrence sends it. */
+  function writeException(db: Firestore, key: string, value: unknown, named = key) {
+    return updateDoc(
+      doc(db, ...eventPath()),
+      new FieldPath("exceptions", key),
+      value,
+      "lastExceptionKey",
+      named,
+      "updatedAt",
+      serverTimestamp(),
+    );
+  }
+
+  const override = (extra: Record<string, unknown> = {}) => ({
+    start: ts("2026-10-14T08:00:00Z"),
+    end: ts("2026-10-14T09:00:00Z"),
+    ...extra,
+  });
+
+  beforeEach(async () => {
+    await seedEvent("e1", { recurrence: weekly });
+  });
+
+  it("lets a member cancel or change one occurrence, one key at a time", async () => {
+    const db = dbAs(env, nevio);
+    await assertSucceeds(writeException(db, "2026-10-13", { cancelled: true }));
+    await assertSucceeds(
+      writeException(
+        db,
+        "2026-10-20",
+        override({ title: "Kontrolle", category: "other", participants: [nevio.uid] }),
+      ),
+    );
+    const data = (await getDoc(doc(db, ...eventPath()))).data();
+    expect(Object.keys(data?.exceptions ?? {})).toEqual(["2026-10-13", "2026-10-20"]);
+  });
+
+  it("denies two keys at once or a key other than lastExceptionKey", async () => {
+    const db = dbAs(env, nevio);
+    await assertFails(
+      updateDoc(doc(db, ...eventPath()), {
+        exceptions: { "2026-10-13": { cancelled: true }, "2026-10-20": { cancelled: true } },
+        lastExceptionKey: "2026-10-13",
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertFails(writeException(db, "2026-10-13", { cancelled: true }, "2026-10-20"));
+  });
+
+  it("denies a bad key and invalid values", async () => {
+    const db = dbAs(env, nevio);
+    await assertFails(writeException(db, "13.10.2026", { cancelled: true }));
+    await assertFails(writeException(db, "2026-10-13", { cancelled: false }));
+    await assertFails(
+      writeException(
+        db,
+        "2026-10-13",
+        override({ end: ts("2026-10-14T07:00:00Z") }), // before the start
+      ),
+    );
+    await assertFails(writeException(db, "2026-10-13", override({ allDay: true })));
+    await assertFails(writeException(db, "2026-10-13", override({ participants: [lea.uid] })));
+    await assertFails(writeException(db, "2026-10-13", override({ title: " Kontrolle" })));
+  });
+
+  it("denies exceptions on a one-off event and on create", async () => {
+    await seedEvent("e1");
+    const db = dbAs(env, nevio);
+    await assertFails(writeException(db, "2026-10-13", { cancelled: true }));
+    await assertFails(
+      setDoc(
+        doc(db, ...eventPath("e2")),
+        newEvent(nevio, { recurrence: weekly, exceptions: { "2026-10-13": { cancelled: true } } }),
+      ),
+    );
+  });
+
+  it("caps a series at 100 exceptions", async () => {
+    const exceptions = Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [
+        new Date(Date.UTC(2027, 0, 1) + i * DAY_MS).toISOString().slice(0, 10),
+        { cancelled: true },
+      ]),
+    );
+    await seedEvent("e1", { recurrence: weekly, exceptions });
+    await assertFails(writeException(dbAs(env, nevio), "2026-10-13", { cancelled: true }));
+  });
+
+  it("lets a series edit drop the exceptions, never write them (B12)", async () => {
+    await seedEvent("e1", {
+      recurrence: weekly,
+      exceptions: { "2026-10-13": { cancelled: true } },
+      lastExceptionKey: "2026-10-13",
+    });
+    const db = dbAs(env, nevio);
+    await assertFails(
+      updateDoc(doc(db, ...eventPath()), {
+        title: "Arzt",
+        exceptions: { "2026-10-20": { cancelled: true } },
+        updatedAt: serverTimestamp(),
+      }),
+    );
+    await assertSucceeds(
+      updateDoc(doc(db, ...eventPath()), {
+        recurrence: { ...weekly, interval: 2 },
+        exceptions: deleteField(),
+        lastExceptionKey: deleteField(),
+        updatedAt: serverTimestamp(),
+      }),
+    );
+  });
+
+  it("denies a one-off event that keeps its exceptions", async () => {
+    await seedEvent("e1", {
+      recurrence: weekly,
+      exceptions: { "2026-10-13": { cancelled: true } },
+      lastExceptionKey: "2026-10-13",
+    });
+    await assertFails(
+      updateDoc(doc(dbAs(env, nevio), ...eventPath()), {
+        recurrence: deleteField(),
+        updatedAt: serverTimestamp(),
+      }),
     );
   });
 });

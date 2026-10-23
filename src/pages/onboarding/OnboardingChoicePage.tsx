@@ -7,8 +7,11 @@ import { OfflineBanner } from "../../components/layout/OfflineBanner";
 import { ChoiceCards, type Choice } from "../../components/onboarding/ChoiceCards";
 import { Avatar } from "../../components/ui/Avatar";
 import { Button } from "../../components/ui/Button";
+import { InlineAlert } from "../../components/ui/InlineAlert";
 import { useDocumentTitle } from "../../hooks/useDocumentTitle";
 import { useCurrentMember } from "../../lib/auth/useCurrentMember";
+import { lifecycleCopy } from "../../lib/copy";
+import { clearHouseholdEnded, isHouseholdEnded } from "../../lib/household/householdEnded";
 
 type Start = "create" | "join";
 
@@ -28,11 +31,15 @@ const choices: Choice<Start>[] = [
   },
 ];
 
-/** /onboarding «Auswahl» (AUTH-06): create a household or join one with a code. */
+/**
+ * /onboarding «Auswahl» (AUTH-06): create a household or join one with a code. After a
+ * removal or a deleted household, once, the D88 note above (Phase 9 B6).
+ */
 export default function OnboardingChoicePage() {
   const member = useCurrentMember();
   const navigate = useNavigate();
   const [start, setStart] = useState<Start>("create");
+  const [ended] = useState(isHouseholdEnded);
   const questionId = useId();
   useDocumentTitle("Haushalt einrichten");
 
@@ -42,6 +49,7 @@ export default function OnboardingChoicePage() {
     <AuthLayout>
       <div className="flex flex-1 flex-col gap-7">
         <OfflineBanner />
+        {ended && <InlineAlert tone="info">{lifecycleCopy.ended}</InlineAlert>}
         <div className="flex flex-col items-start gap-2.5">
           {/* D6: the avatar opens the account menu, with only «Abmelden». */}
           <AccountMenu
@@ -73,7 +81,10 @@ export default function OnboardingChoicePage() {
         <Button
           size="lg"
           fullWidth
-          onClick={() => navigate(`/onboarding/${start}`)}
+          onClick={() => {
+            clearHouseholdEnded();
+            navigate(`/onboarding/${start}`);
+          }}
           className="mt-auto lg:mt-0"
         >
           Weiter

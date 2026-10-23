@@ -201,10 +201,10 @@ describe("households: settings, delete", () => {
     );
   });
 
-  it("lets only the owner delete the household", async () => {
+  it("lets nobody delete the household outright, the owner only after starting a delete (Phase 9 B7)", async () => {
     await assertFails(deleteDoc(doc(dbAs(env, anna), "households", HID)));
     await assertFails(deleteDoc(doc(dbAs(env, lea), "households", HID)));
-    await assertSucceeds(deleteDoc(doc(dbAs(env, nevio), "households", HID)));
+    await assertFails(deleteDoc(doc(dbAs(env, nevio), "households", HID)));
   });
 });
 

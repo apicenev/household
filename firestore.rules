@@ -12,16 +12,21 @@ rules_version = '2';
 //   households/{hid}/members           members read, own doc only             (Phase 2)
 //   households/{hid}/tasks             members CRUD, validated                (Phases 3, 4)
 //   households/{hid}/shoppingItems     members CRUD, validated                (Phase 5)
-//   households/{hid}/itemStats         members create / count ±1, no delete   (Phase 5)
+//   households/{hid}/itemStats         members create / count ±1;             (Phase 5)
+//                                      owner deletes only while deleting      (Phase 9)
 //   households/{hid}/events            members CRUD, validated                (Phases 6, 7)
-//   households/{hid}/activity          members create, append-only;           (Phase 2)
+//   households/{hid}/activity          members create, append-only (owner     (Phase 2)
+//                                      deletes only while deleting, Phase 9);
 //                                      feed list by createdAt, optionally      (Phase 8)
 //                                      by targetType (firestore.indexes.json)
-//   invites/{code}                     get by signed-in users                 (Phase 2)
+//   invites/{code}                     get without a household or as a member (Phases 2, 9)
 //
-// Multi-document writes (create a household, join, new code, profile edits) are single
-// batches. The rules cross-check the other documents of a batch with getAfter(), so an
-// incomplete batch is rejected as a whole (NFR-05).
+// Multi-document writes (create a household, join, new code, profile edits; Phase 9: leave,
+// remove, hand over, delete) are single batches. The rules cross-check the other documents
+// of a batch with getAfter(), so an incomplete batch is rejected as a whole (NFR-05).
+//
+// Phase 9: a household with `demo: true` (set only with the Admin SDK) can't be left,
+// emptied, handed over, deleted or renamed, and its members can't change their names.
 //
 // Emulator tests: src/tests/rules/.
 
@@ -71,6 +76,17 @@ service cloud.firestore {
 
     function isOwner(hid) {
       return isSignedIn() && get(householdPath(hid)).data.ownerId == request.auth.uid;
+    }
+
+    // Demo household (Phase 9 C4, C5): `demo` is set only with the Admin SDK (the household
+    // key lists exclude it). It blocks the actions that would break the demo for everyone.
+    function isDemoHousehold(hid) {
+      return hid is string && get(householdPath(hid)).data.get('demo', false) == true;
+    }
+
+    // Deletion in progress (Phase 9 B7): only the owner is left in memberIds.
+    function isDeletingHousehold(hid) {
+      return get(householdPath(hid)).data.get('deleting', false) == true;
     }
 
     function changedKeys() {
@@ -128,12 +144,15 @@ service cloud.firestore {
           && data.createdAt == request.time;
       }
 
+      // A demo user's name stays (Phase 9 C5); the avatar colour may change.
       function validProfileUpdate() {
         let data = request.resource.data;
         return changedKeys().hasOnly(['displayName', 'initials', 'avatarColor'])
           && validDisplayName(data.displayName)
           && validInitials(data.initials)
-          && validAvatarColor(data.avatarColor);
+          && validAvatarColor(data.avatarColor)
+          && (!changedKeys().hasAny(['displayName', 'initials'])
+            || !isDemoHousehold(resource.data.householdId));
       }
 
       // Creating or joining a household: null → hid, only together with the membership.
@@ -146,9 +165,21 @@ service cloud.firestore {
           && request.auth.uid in getAfter(householdPath(hid)).data.memberIds;
       }
 
+      // Leaving, or healing a stale id (Phase 9 B2, B6): hid → null once I'm no longer in
+      // that household's memberIds after the write, or it's gone (removed, deleted).
+      function validHouseholdIdClear() {
+        let old = resource.data.householdId;
+        return changedKeys().hasOnly(['householdId'])
+          && request.resource.data.householdId == null
+          && old is string
+          && (!existsAfter(householdPath(old))
+            || !(request.auth.uid in getAfter(householdPath(old)).data.memberIds));
+      }
+
       allow get: if isSelf(uid);
       allow create: if isSelf(uid) && validNewProfile();
-      allow update: if isSelf(uid) && (validProfileUpdate() || validHouseholdIdSet());
+      allow update: if isSelf(uid)
+        && (validProfileUpdate() || validHouseholdIdSet() || validHouseholdIdClear());
       allow list, delete: if false;
     }
 
@@ -202,7 +233,8 @@ service cloud.firestore {
       }
 
       // rotationOrder is checked only when it changes, so an order that still holds a
-      // former member (Phase 9) doesn't block renaming the household.
+      // former member doesn't block renaming the household. A demo household keeps its name
+      // (Phase 9 C5).
       function isSettingsUpdate() {
         let data = request.resource.data;
         return resource.data.ownerId == request.auth.uid
@@ -212,7 +244,89 @@ service cloud.firestore {
           && validName(data.name)
           && validWeekStart(data.weekStartsOn)
           && validTimeZone(data.timeZone)
-          && (!('rotationOrder' in changedKeys()) || validRotationOrder(data.rotationOrder));
+          && (!('rotationOrder' in changedKeys()) || validRotationOrder(data.rotationOrder))
+          && (!('name' in changedKeys()) || !isDemo());
+      }
+
+      function isDemo() {
+        return resource.data.get('demo', false) == true;
+      }
+
+      function isDeleting() {
+        return resource.data.get('deleting', false) == true;
+      }
+
+      // The lifecycle writes (Phase 9) never touch a demo household or one being deleted.
+      function isLifecycleAllowed() {
+        return !isDemo() && !isDeleting();
+      }
+
+      // rotationOrder after `uids` left: the same order without them (absent stays absent).
+      function rotationOrderWithout(uids) {
+        return request.resource.data.get('rotationOrder', [])
+          == resource.data.get('rotationOrder', []).removeAll(uids);
+      }
+
+      // Leave batch (Phase 9 B1, B2): a member (not the owner) takes only themself out of
+      // memberIds and rotationOrder, deletes their member doc and clears their profile's
+      // householdId in the same batch.
+      function isLeave() {
+        let data = request.resource.data;
+        let uid = request.auth.uid;
+        return isLifecycleAllowed()
+          && uid in resource.data.memberIds
+          && resource.data.ownerId != uid
+          && changedKeys().hasOnly(['memberIds', 'rotationOrder', 'updatedAt'])
+          && data.updatedAt == request.time
+          && data.memberIds == resource.data.memberIds.removeAll([uid])
+          && rotationOrderWithout([uid])
+          && !existsAfter(memberPath(hid, uid))
+          && profileAfter().householdId == null;
+      }
+
+      // Remove batch (Phase 9 B4): the owner takes exactly one other member out of memberIds
+      // and rotationOrder and deletes their member doc in the same batch.
+      function isRemoveMember() {
+        let data = request.resource.data;
+        let removed = resource.data.memberIds.removeAll(data.memberIds);
+        return isLifecycleAllowed()
+          && resource.data.ownerId == request.auth.uid
+          && changedKeys().hasOnly(['memberIds', 'rotationOrder', 'updatedAt'])
+          && data.updatedAt == request.time
+          && removed.size() == 1
+          && removed[0] != request.auth.uid
+          && data.memberIds == resource.data.memberIds.removeAll(removed)
+          && rotationOrderWithout(removed)
+          && !existsAfter(memberPath(hid, removed[0]));
+      }
+
+      // Hand-over batch (Phase 9 B5): ownerId moves to another member, and both member docs
+      // swap their role in the same batch.
+      function isHandOver() {
+        let data = request.resource.data;
+        let uid = request.auth.uid;
+        return isLifecycleAllowed()
+          && resource.data.ownerId == uid
+          && changedKeys().hasOnly(['ownerId', 'updatedAt'])
+          && data.updatedAt == request.time
+          && data.ownerId != uid
+          && data.ownerId in resource.data.memberIds
+          && getAfter(memberPath(hid, data.ownerId)).data.role == 'owner'
+          && getAfter(memberPath(hid, uid)).data.role == 'member';
+      }
+
+      // First step of a delete (Phase 9 B7): `deleting` set, only the owner left in
+      // memberIds (everyone else is shut out at once and heals, B6), no rotation order.
+      function isStartDelete() {
+        let data = request.resource.data;
+        let uid = request.auth.uid;
+        return isLifecycleAllowed()
+          && resource.data.ownerId == uid
+          && changedKeys().hasOnly(['deleting', 'memberIds', 'rotationOrder', 'updatedAt'])
+          && data.deleting == true
+          && data.memberIds == [uid]
+          && data.get('rotationOrder', []) == []
+          && data.updatedAt == request.time;
       }
 
       // New code batch: delete the old invite + create the new one + this update (HH-03).
@@ -234,6 +348,7 @@ service cloud.firestore {
         let data = request.resource.data;
         let uid = request.auth.uid;
         return !(uid in resource.data.memberIds)
+          && !isDeleting()
           && data.memberIds == resource.data.memberIds.concat([uid])
           && changedKeys().hasOnly(['memberIds', 'updatedAt'])
           && data.updatedAt == request.time
@@ -246,8 +361,14 @@ service cloud.firestore {
       allow get: if isSignedIn() && request.auth.uid in resource.data.memberIds;
       allow list: if false;
       allow create: if isSignedIn() && validNewHousehold();
-      allow update: if isSignedIn() && (isSettingsUpdate() || isNewCode() || isJoin());
-      allow delete: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow update: if isSignedIn()
+        && (isSettingsUpdate() || isNewCode() || isJoin() || isLeave() || isRemoveMember()
+          || isHandOver() || isStartDelete());
+      // Last step of a delete (Phase 9 B7): only after isStartDelete, never a demo household.
+      allow delete: if isSignedIn()
+        && resource.data.ownerId == request.auth.uid
+        && isDeleting()
+        && !isDemo();
 
       // members/{uid}: the member's profile, copied for display.
       match /members/{uid} {
@@ -286,19 +407,42 @@ service cloud.firestore {
         }
 
         // Only together with the same change on the profile (memberService.updateMyProfile).
+        // A demo user's name stays (Phase 9 C5).
         function validMemberUpdate() {
           let data = request.resource.data;
           let p = profileAfter();
           return changedKeys().hasOnly(['displayName', 'initials', 'avatarColor'])
             && data.displayName == p.displayName
             && data.initials == p.initials
-            && data.avatarColor == p.avatarColor;
+            && data.avatarColor == p.avatarColor
+            && (!changedKeys().hasAny(['displayName', 'initials']) || !isDemoHousehold(hid));
+        }
+
+        // Hand-over (Phase 9 B5): the old owner sets their own role to member and the new
+        // owner's to owner, in the batch that moves ownerId.
+        function isRoleSwap() {
+          let before = get(householdPath(hid)).data;
+          let after = getAfter(householdPath(hid)).data;
+          let role = request.resource.data.role;
+          return changedKeys().hasOnly(['role'])
+            && before.ownerId == request.auth.uid
+            && after.ownerId != request.auth.uid
+            && ((uid == after.ownerId && role == 'owner')
+              || (uid == request.auth.uid && role == 'member'));
+        }
+
+        // Leaving, removal and deletion (Phase 9 B2, B4, B7): the doc goes once the member
+        // is out of memberIds after the batch, or the household itself is gone. Oneself, or
+        // the owner for anyone.
+        function isGoneAfter() {
+          return !existsAfter(householdPath(hid))
+            || !(uid in getAfter(householdPath(hid)).data.memberIds);
         }
 
         allow get, list: if isMember(hid);
         allow create: if isSelf(uid) && (validOwnerMember() || validJoinerMember());
-        allow update: if isSelf(uid) && validMemberUpdate();
-        allow delete: if false;
+        allow update: if (isSelf(uid) && validMemberUpdate()) || (isSignedIn() && isRoleSwap());
+        allow delete: if (isSelf(uid) || isOwner(hid)) && isGoneAfter();
       }
 
       // Recurrence rules, shared by tasks (Phase 4 B2, B3; mirrors validateRule in
@@ -637,14 +781,17 @@ service cloud.firestore {
         allow get, list: if isMember(hid);
         allow create: if isMember(hid) && validNewStat();
         allow update: if isMember(hid) && (isPurchase() || isUnpurchase());
-        allow delete: if false;
+        // Only while the owner deletes the household (Phase 9 B7).
+        allow delete: if isOwner(hid) && isDeletingHousehold(hid);
       }
 
       // events/{eventId} (Phase 6 B1–B3, B5, B13): any member creates, edits and deletes.
-      // Every write is checked as a whole event, so an edit that still lists a former member
-      // is rejected (the client drops them, B5). Timed events store instants; all-day events
-      // floating dates at 00:00 UTC with an inclusive end (B2). A recurring event (Phase 7)
-      // stores its first occurrence and a rule (validEventRecurrence); `exceptions` stays out.
+      // Participants are checked on create and when they change (Phase 9 B19), so an event
+      // that still lists a former member stays editable; the client drops them on save (B5).
+      // Timed events store instants; all-day events floating dates at 00:00 UTC with an
+      // inclusive end (B2). A recurring event (Phase 7) stores its first occurrence and a rule
+      // (validEventRecurrence), and single occurrences cancelled or changed in `exceptions`
+      // (Phase 9 B10), written one key at a time (isExceptionEdit).
       match /events/{eventId} {
         function validEventTitle(value) {
           return value is string && value.size() >= 1 && value.size() <= 200
@@ -678,41 +825,88 @@ service cloud.firestore {
                 && length <= 365 * dayMs));
         }
 
-        function validEventData(data) {
+        function validDescription(value) {
+          return value is string && value.size() >= 1 && value.size() <= 2000;
+        }
+
+        // `exceptions` (Phase 9 B10) only on a series; `lastExceptionKey` only with them.
+        function validEventData(data, checkParticipants) {
           return data.keys().hasOnly(['title', 'description', 'category', 'allDay', 'start',
-                                      'end', 'participants', 'recurrence', 'createdBy',
-                                      'createdAt', 'updatedAt'])
+                                      'end', 'participants', 'recurrence', 'exceptions',
+                                      'lastExceptionKey', 'createdBy', 'createdAt',
+                                      'updatedAt'])
             && data.keys().hasAll(['title', 'category', 'allDay', 'start', 'end',
                                    'participants', 'createdBy', 'createdAt', 'updatedAt'])
             && validEventTitle(data.title)
-            && (!('description' in data)
-              || (data.description is string
-                && data.description.size() >= 1 && data.description.size() <= 2000))
+            && (!('description' in data) || validDescription(data.description))
             && validEventCategory(data.category)
             && data.allDay is bool
             && validEventTimes(data)
-            && validParticipants(data.participants)
+            && (!checkParticipants || validParticipants(data.participants))
             && (!('recurrence' in data) || validEventRecurrence(data.recurrence))
+            && (!('exceptions' in data) || 'recurrence' in data)
             && data.updatedAt == request.time;
         }
 
         function validNewEvent() {
           let data = request.resource.data;
-          return validEventData(data)
+          return validEventData(data, true)
+            && !('exceptions' in data)
+            && !('lastExceptionKey' in data)
             && data.createdBy == request.auth.uid
             && data.createdAt == request.time;
         }
 
+        // An edit of the event as a whole may only drop the exceptions (Phase 9 B12: a new
+        // rule, start or times reset them), never write them.
         function isEventEdit() {
           let data = request.resource.data;
-          return validEventData(data)
+          return validEventData(data, 'participants' in changedKeys())
+            && (!changedKeys().hasAny(['exceptions', 'lastExceptionKey'])
+              || (!('exceptions' in data) && !('lastExceptionKey' in data)))
             && data.createdBy == resource.data.createdBy
             && data.createdAt == resource.data.createdAt;
         }
 
+        // One exception (REV-07, Phase 9 B10): cancelled, or an override with new times and the
+        // fields that differ from the series; validated like the event, «Ganztägig» stays the
+        // series' own.
+        function validException(value) {
+          return value is map
+            && ((value.keys().hasOnly(['cancelled']) && value.get('cancelled', false) == true)
+              || (value.keys().hasOnly(['start', 'end', 'title', 'description', 'category',
+                                        'participants'])
+                && value.keys().hasAll(['start', 'end'])
+                && value.start is timestamp && value.end is timestamp
+                && validEventTimes({ 'allDay': resource.data.allDay, 'start': value.start,
+                                     'end': value.end })
+                && (!('title' in value) || validEventTitle(value.title))
+                && (!('description' in value) || validDescription(value.description))
+                && (!('category' in value) || validEventCategory(value.category))
+                && (!('participants' in value) || validParticipants(value.participants))));
+        }
+
+        // Exception write (Phase 9 B10): rules can't read an element of a Set, so the write
+        // names its key in `lastExceptionKey`, and exactly that key may change.
+        function isExceptionEdit() {
+          let data = request.resource.data;
+          let key = data.get('lastExceptionKey', null);
+          return 'recurrence' in resource.data
+            && changedKeys().hasOnly(['exceptions', 'lastExceptionKey', 'updatedAt'])
+            && data.updatedAt == request.time
+            && key is string
+            && key.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && data.exceptions is map
+            && data.exceptions.size() <= 100
+            && data.exceptions.diff(resource.data.get('exceptions', {})).affectedKeys()
+              .hasOnly([key])
+            && key in data.exceptions
+            && validException(data.exceptions[key]);
+        }
+
         allow get, list: if isMember(hid);
         allow create: if isMember(hid) && validNewEvent();
-        allow update: if isMember(hid) && isEventEdit();
+        allow update: if isMember(hid) && (isEventEdit() || isExceptionEdit());
         allow delete: if isMember(hid);
       }
 
@@ -797,6 +991,27 @@ service cloud.firestore {
                 && isMemberAfter(hid)));
         }
 
+        // Leaving (Phase 9 B8): in the leave batch, about oneself.
+        function validMemberLeft(data) {
+          let uid = request.auth.uid;
+          return data.type == 'member_left'
+            && data.targetType == 'member'
+            && data.targetId == uid
+            && !('details' in data)
+            && uid in get(householdPath(hid)).data.memberIds
+            && !(uid in getAfter(householdPath(hid)).data.memberIds);
+        }
+
+        // Removal (Phase 9 B8): in the owner's remove batch, about the removed member.
+        function validMemberRemoved(data) {
+          return data.type == 'member_removed'
+            && data.targetType == 'member'
+            && isOwner(hid)
+            && data.targetId in get(householdPath(hid)).data.memberIds
+            && !(data.targetId in getAfter(householdPath(hid)).data.memberIds)
+            && !('details' in data);
+        }
+
         function validNewActivity() {
           let data = request.resource.data;
           return data.keys().hasOnly(['actorId', 'type', 'targetType', 'targetId',
@@ -809,17 +1024,20 @@ service cloud.firestore {
             && data.targetId is string
             && data.targetTitle is string
             && (validMemberJoined(data) || validTaskActivity(data) || validItemActivity(data)
-              || validEventActivity(data));
+              || validEventActivity(data) || validMemberLeft(data)
+              || validMemberRemoved(data));
         }
 
         allow get, list: if isMember(hid);
         allow create: if isSignedIn() && validNewActivity();
-        allow update, delete: if false;
+        allow update: if false;
+        // Append-only (ACT-06), except while the owner deletes the household (Phase 9 B7).
+        allow delete: if isOwner(hid) && isDeletingHousehold(hid);
       }
     }
 
-    // invites/{code}: lookup for the join flow. Anyone signed in may get a code (needed
-    // before joining), nobody may list them.
+    // invites/{code}: lookup for the join flow. Users without a household may get a code
+    // (needed before joining), nobody may list them.
     match /invites/{code} {
       function validNewInvite() {
         let data = request.resource.data;
@@ -856,10 +1074,40 @@ service cloud.firestore {
               && !(request.auth.uid in get(householdPath(hid)).data.memberIds)));
       }
 
-      allow get: if isSignedIn();
+      // Leaving or removal (Phase 9 B9): −1 by someone who was a member before the batch,
+      // in the batch that makes memberIds one shorter. Separate from validInviteUpdate,
+      // because the leaver isn't a member afterwards.
+      function isMemberCountDecrement() {
+        let hid = resource.data.householdId;
+        let before = get(householdPath(hid)).data.memberIds;
+        return changedKeys().hasOnly(['memberCount'])
+          && request.resource.data.memberCount == resource.data.memberCount - 1
+          && request.auth.uid in before
+          && getAfter(householdPath(hid)).data.memberIds.size() == before.size() - 1;
+      }
+
+      // Hand-over (Phase 9 B5): the old owner writes the new owner's name.
+      function isHandOverOwnerName() {
+        let hid = resource.data.householdId;
+        let after = getAfter(householdPath(hid)).data;
+        return changedKeys().hasOnly(['ownerName'])
+          && get(householdPath(hid)).data.ownerId == request.auth.uid
+          && after.ownerId != request.auth.uid
+          && request.resource.data.ownerName
+            == getAfter(memberPath(hid, after.ownerId)).data.displayName;
+      }
+
+      // Lookup (Phase 9 C7): users without a household (joining), members of the code's
+      // household, and codes that don't exist (the free-code check of «Neuer Code»). A
+      // member of another household (e.g. a demo user) can't read someone else's preview.
+      allow get: if isSignedIn()
+        && (resource == null
+          || profile().householdId == null
+          || request.auth.uid in get(householdPath(resource.data.householdId)).data.memberIds);
       allow list: if false;
       allow create: if isSignedIn() && validNewInvite();
-      allow update: if isSignedIn() && validInviteUpdate();
+      allow update: if isSignedIn()
+        && (validInviteUpdate() || isMemberCountDecrement() || isHandOverOwnerName());
       allow delete: if isOwner(resource.data.householdId);
     }
   }

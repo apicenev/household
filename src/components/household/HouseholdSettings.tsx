@@ -3,7 +3,7 @@ import { useState } from "react";
 import { defaultRotationOrder } from "../../domain/rotation";
 import { TIME_ZONES, timeZoneLabel } from "../../domain/timeZones";
 import { useIsDesktop } from "../../hooks/useMediaQuery";
-import { recurrenceCopy } from "../../lib/copy";
+import { lifecycleCopy, recurrenceCopy } from "../../lib/copy";
 import { firestoreErrorMessage } from "../../lib/firestoreErrors";
 import { updateHouseholdSettings } from "../../services/householdService";
 import type { Household, HouseholdSettingsUpdate, Member, WeekStart } from "../../types";
@@ -24,7 +24,8 @@ type SettingsField = "weekStartsOn" | "timeZone" | "rotationOrder";
 /**
  * «Einstellungen» (HH-07): name, week start, time zone and, from Phase 4, the default order of
  * new rotations (D30, hidden with a single member). Saved on change / blur (B1). Only the
- * owner may change them; members see the disabled fields and a caption (D5).
+ * owner may change them; members see the disabled fields and a caption (D5). The demo
+ * household keeps its name (Phase 9 C5, D96).
  */
 export function HouseholdSettings({
   household,
@@ -39,6 +40,7 @@ export function HouseholdSettings({
 }) {
   const desktop = useIsDesktop();
   const disabled = !isOwner;
+  const demo = household.demo === true;
   const [errors, setErrors] = useState<Partial<Record<SettingsField, string>>>({});
   const order = defaultRotationOrder(household.rotationOrder, members, null);
   const name = useAutosaveName(household.name, (value) =>
@@ -71,8 +73,9 @@ export function HouseholdSettings({
         name="householdName"
         autoComplete="off"
         {...name}
-        disabled={disabled}
-        leading={disabled ? <LockClosedIcon className="size-4" /> : undefined}
+        disabled={disabled || demo}
+        leading={disabled || demo ? <LockClosedIcon className="size-4" /> : undefined}
+        helper={demo && !disabled ? lifecycleCopy.demoBlocked : undefined}
         inputClassName="lg:h-11"
       />
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-2 lg:gap-3">

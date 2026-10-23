@@ -1,28 +1,36 @@
+import { EllipsisHorizontalIcon } from "@heroicons/react/24/outline";
 import { formatNumericDate } from "../../lib/format";
-import { householdCopy, roleLabels, terms } from "../../lib/copy";
+import { householdCopy, lifecycleCopy, roleLabels, terms } from "../../lib/copy";
 import type { Member } from "../../types";
 import { Avatar } from "../ui/Avatar";
 import { Badge } from "../ui/Badge";
+import { IconButton } from "../ui/IconButton";
+import { Menu, type MenuEntry } from "../ui/Menu";
 import { HouseholdSection } from "./HouseholdSection";
 
 /**
  * «Mitglieder» (HH-06): avatar, name with «Du», role and join date. Phones show the role in
- * the second line, desktop as a badge. The «⋯» menu is hidden until Phase 9 (B3).
+ * the second line, desktop as a badge. The «⋯» menu (Phase 9 D83) shows the entries
+ * `menuItems` returns for a row; rows without any get no button.
  */
 export function MemberList({
   members,
   myUid,
   timeZone,
+  menuItems,
 }: {
   members: Member[];
   myUid: string;
   timeZone: string;
+  menuItems?: (member: Member) => MenuEntry[];
 }) {
   return (
     <HouseholdSection title="Mitglieder" count={members.length} flush>
       <ul>
         {members.map((member) => {
           const role = roleLabels[member.role];
+          const items = menuItems?.(member) ?? [];
+          const label = lifecycleCopy.menuLabel(member.displayName, member.uid === myUid);
           return (
             <li
               key={member.uid}
@@ -49,6 +57,15 @@ export function MemberList({
               >
                 {role}
               </Badge>
+              {items.length > 0 && (
+                <Menu
+                  aria-label={label}
+                  items={items}
+                  trigger={(props) => (
+                    <IconButton {...props} aria-label={label} icon={EllipsisHorizontalIcon} />
+                  )}
+                />
+              )}
             </li>
           );
         })}

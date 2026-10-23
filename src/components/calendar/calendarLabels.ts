@@ -230,6 +230,8 @@ export interface SeriesDetail {
   rule: string;
   /** «Seit Sa., 19. Sept. · endet nie» / «Endete am …» (D63); missing without occurrences. */
   since?: string;
+  /** «Einzeln geändert» for an occurrence changed on its own (Phase 9 D94). */
+  changed?: string;
   next: NextDate[];
 }
 
@@ -265,6 +267,7 @@ export function seriesDetail(
   return {
     rule: ruleLine(occurrence, timeZone, members, weekStartsOn),
     since: bounds ? describeSeriesEnd(event.recurrence, bounds, todayKey) : undefined,
+    changed: occurrence.changed ? calendarCopy.single.changed : undefined,
     next: next.map((item) => ({
       key: item.key,
       date: item.event.allDay

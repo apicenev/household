@@ -6,7 +6,7 @@ import { ToastProvider } from "../components/ui/ToastProvider";
 import { allDayToStored, zonedToInstant } from "../domain/eventTime";
 import { AuthContext, type AuthContextValue } from "../lib/auth/useAuth";
 import { AppRoutes } from "../router/AppRoutes";
-import type { CalendarEvent } from "../types";
+import type { CalendarEvent, EventException } from "../types";
 import {
   eventServiceMock,
   fakeStore,
@@ -167,6 +167,18 @@ function optimisticWrites() {
   eventServiceMock.deleteEvent.mockImplementation(async (_hid, id) =>
     fakeStore.setEvents(fakeStore.events.filter((e) => e.id !== id)),
   );
+  const writeException = (id: string, dateKey: string, exception: EventException) =>
+    fakeStore.setEvents(
+      fakeStore.events.map((e) =>
+        e.id === id ? { ...e, exceptions: { ...e.exceptions, [dateKey]: exception } } : e,
+      ),
+    );
+  eventServiceMock.cancelOccurrence.mockImplementation(async (_hid, id, dateKey) =>
+    writeException(id, dateKey, { cancelled: true }),
+  );
+  eventServiceMock.editOccurrence.mockImplementation(async (_hid, id, dateKey, override) =>
+    writeException(id, dateKey, override),
+  );
 }
 
 beforeEach(() => {
@@ -176,6 +188,8 @@ beforeEach(() => {
   eventServiceMock.createEvent.mockReset();
   eventServiceMock.updateEvent.mockReset();
   eventServiceMock.deleteEvent.mockReset();
+  eventServiceMock.cancelOccurrence.mockReset();
+  eventServiceMock.editOccurrence.mockReset();
   optimisticWrites();
 });
 
@@ -1013,6 +1027,19 @@ describe("Termin-Sheet: recurring events (Phase 7 slice C)", () => {
     });
   });
 
+  /** Opens «Bearbeiten» on the card and picks «Ganze Serie» or «Nur diesen Termin» (D92). */
+  async function editFromCard(day: string, choice = "Ganze Serie") {
+    renderCalendar(`/calendar?day=${day}`);
+    await page();
+    const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+    await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Bearbeiten" }));
+    const choose = screen.getByRole("alertdialog", { name: "Welche Termine bearbeiten?" });
+    await userEvent.click(within(choose).getByRole("radio", { name: new RegExp(choice) }));
+    await userEvent.click(within(choose).getByRole("button", { name: "Weiter" }));
+    return sheet("Termin bearbeiten");
+  }
+
   describe("editing and deleting a series (REV-04, D61, D62)", () => {
     beforeEach(() => {
       fakeStore.events = [
@@ -1023,15 +1050,6 @@ describe("Termin-Sheet: recurring events (Phase 7 slice C)", () => {
         }),
       ];
     });
-
-    async function editFromCard(day: string) {
-      renderCalendar(`/calendar?day=${day}`);
-      await page();
-      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
-      await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
-      await userEvent.click(within(panel).getByRole("button", { name: "Bearbeiten" }));
-      return sheet("Termin bearbeiten");
-    }
 
     it("opens the series with its first date and the hint, and changes only the end", async () => {
       const dialog = await editFromCard("2026-10-17");
@@ -1087,9 +1105,98 @@ describe("Termin-Sheet: recurring events (Phase 7 slice C)", () => {
       expect(
         within(confirm).getByText("Alle Termine dieser Serie verschwinden für Nevio und Anna."),
       ).toBeInTheDocument();
-      await userEvent.click(within(confirm).getByRole("button", { name: "Löschen" }));
+      await userEvent.click(within(confirm).getByRole("radio", { name: /Ganze Serie/ }));
+      await userEvent.click(within(confirm).getByRole("button", { name: "Ganze Serie löschen" }));
       expect(eventServiceMock.deleteEvent).toHaveBeenCalledWith("h1", "cleaning");
       expect(screen.queryByText("Dieser Termin wurde gelöscht.")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("single occurrences (REV-07, Phase 9 D92–D95)", () => {
+    const cleaning = (overrides: Partial<CalendarEvent> = {}) =>
+      timed("cleaning", "Grossputz", "2026-09-19", "10:00", "12:00", {
+        category: "home",
+        recurrence: { freq: "weekly", interval: 2, byWeekday: [6] },
+        ...overrides,
+      });
+
+    beforeEach(() => {
+      fakeStore.events = [...exampleEvents(), cleaning()];
+    });
+
+    it("cancels only this occurrence by default", async () => {
+      renderCalendar("/calendar?day=2026-10-17");
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      await userEvent.click(within(panel).getByRole("button", { name: /Grossputz/ }));
+      await userEvent.click(within(panel).getByRole("button", { name: "Löschen" }));
+      const confirm = screen.getByRole("alertdialog", { name: "«Grossputz» löschen?" });
+      expect(within(confirm).getByText("Nur der Termin am Sa., 17. Okt.")).toBeInTheDocument();
+      await userEvent.click(
+        within(confirm).getByRole("button", { name: "Nur diesen Termin löschen" }),
+      );
+      expect(eventServiceMock.cancelOccurrence).toHaveBeenCalledWith(
+        "h1",
+        "cleaning",
+        "2026-10-17",
+      );
+      expect(eventServiceMock.deleteEvent).not.toHaveBeenCalled();
+    });
+
+    it("edits only this occurrence: its values, no «Ganztägig» or «Wiederholen» (D93)", async () => {
+      const dialog = await editFromCard("2026-10-17", "Nur diesen Termin");
+      expect(
+        within(dialog).getByText("Änderungen gelten nur für Sa., 17. Okt."),
+      ).toBeInTheDocument();
+      expect(pill(dialog, "Beginn, Datum")).toHaveValue("2026-10-17");
+      expect(within(dialog).queryByRole("switch", { name: /Ganztägig/ })).toBeNull();
+      expect(within(dialog).queryByRole("button", { name: "Alle N Wochen" })).toBeNull();
+      await userEvent.clear(within(dialog).getByRole("textbox", { name: "Titel" }));
+      await userEvent.type(within(dialog).getByRole("textbox", { name: "Titel" }), "Fensterputz");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+      expect(eventServiceMock.editOccurrence).toHaveBeenCalledWith(
+        "h1",
+        "cleaning",
+        "2026-10-17",
+        expect.objectContaining({ title: "Fensterputz", start: expect.any(Date) }),
+      );
+    });
+
+    it("hides a cancelled occurrence and marks a changed one (D94)", async () => {
+      const series = cleaning();
+      fakeStore.events = [
+        ...exampleEvents(),
+        cleaning({
+          exceptions: {
+            "2026-10-03": { cancelled: true },
+            "2026-10-17": { start: series.start, end: series.end, title: "Fensterputz" },
+          },
+        }),
+      ];
+      // The override above keeps the 19 Sept times, so its occurrence moved there.
+      renderCalendar("/calendar?day=2026-10-03");
+      await page();
+      const panel = screen.getByRole("complementary", { name: "Ausgewählter Tag" });
+      expect(within(panel).queryByRole("button", { name: /Grossputz/ })).toBeNull();
+    });
+
+    it("warns that a schedule change resets the exceptions and clears them (D95, B12)", async () => {
+      fakeStore.events = [
+        ...exampleEvents(),
+        cleaning({ exceptions: { "2026-10-03": { cancelled: true } } }),
+      ];
+      const dialog = await editFromCard("2026-10-17");
+      const note = "Einzeln geänderte und abgesagte Termine dieser Serie werden zurückgesetzt.";
+      expect(within(dialog).queryByText(note)).toBeNull();
+      await userEvent.click(within(dialog).getByRole("radio", { name: "Nach N Mal" }));
+      expect(within(dialog).getByText(note)).toBeInTheDocument();
+      await userEvent.click(within(dialog).getByRole("button", { name: "Speichern" }));
+      expect(eventServiceMock.updateEvent).toHaveBeenCalledWith(
+        "h1",
+        "cleaning",
+        expect.objectContaining({ recurrence: expect.any(Object) }),
+        { clearExceptions: true },
+      );
     });
   });
 });

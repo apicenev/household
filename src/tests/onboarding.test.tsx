@@ -5,6 +5,7 @@ import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../components/ui/ToastProvider";
 import { AuthContext, type AuthContextValue } from "../lib/auth/useAuth";
+import { isHouseholdEnded, markHouseholdEnded } from "../lib/household/householdEnded";
 import { AppRoutes } from "../router/AppRoutes";
 import type { Invite } from "../types";
 import { fakeStore, householdServiceMock, nevioProfile } from "./householdFakes";
@@ -155,6 +156,22 @@ describe("Auswahl", () => {
     renderOnboarding();
     await userEvent.click(await screen.findByRole("button", { name: "Weiter" }));
     expect(await screen.findByRole("heading", { name: "Haushalt erstellen" })).toBeInTheDocument();
+  });
+
+  it("explains a removal or deleted household until the user moves on (Phase 9 D88)", async () => {
+    markHouseholdEnded();
+    renderOnboarding();
+    const note =
+      "Du gehörst keinem Haushalt mehr an. Erstelle einen neuen oder tritt mit einem Code bei.";
+    expect(await screen.findByText(note)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Weiter" }));
+    expect(isHouseholdEnded()).toBe(false);
+  });
+
+  it("shows no such note normally", async () => {
+    renderOnboarding();
+    await screen.findByRole("heading", { name: "Hallo Nevio" });
+    expect(screen.queryByText(/keinem Haushalt mehr/)).not.toBeInTheDocument();
   });
 
   it("opens a menu with only «Abmelden» from the avatar (D6)", async () => {

@@ -1,6 +1,7 @@
 import {
   doc,
   getDoc,
+  getDocFromServer,
   onSnapshot,
   serverTimestamp,
   setDoc,
@@ -64,6 +65,19 @@ export function listenToUserProfile(
       onChange(snapshot.exists() ? snapshot.data() : null, snapshot.metadata.hasPendingWrites),
     onError,
   );
+}
+
+/**
+ * Self-heal (Phase 9 B6): clears the profile's householdId if it still points at
+ * `householdId`, after the member was removed or the household deleted. Read from the server,
+ * so a leave or delete done on this device (which already cleared it) is left alone.
+ * Returns whether it cleared anything; the rules reject the clear while still a member.
+ */
+export async function clearStaleHousehold(uid: string, householdId: string): Promise<boolean> {
+  const snapshot = await getDocFromServer(profileRef(uid));
+  if (snapshot.data()?.householdId !== householdId) return false;
+  await updateDoc(profileRef(uid), { householdId: null });
+  return true;
 }
 
 /** Changes name, initials or avatar colour (the only fields the rules allow). */

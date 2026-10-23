@@ -2,7 +2,10 @@ import { toDateKey } from "../lib/format";
 import type {
   CalendarEvent,
   EventCategory,
+  EventChanges,
+  EventException,
   EventOccurrence,
+  EventOverride,
   EventParticipants,
   Member,
   WeekStart,
@@ -167,7 +170,10 @@ export function occurrenceTimes(
   return { start, end: end.getTime() < start.getTime() ? start : end };
 }
 
-/** The occurrence of a series on `dateKey` (which must be on its schedule). */
+/**
+ * The occurrence of a series on `dateKey` (which must be on its schedule) as the schedule has
+ * it, ignoring exceptions (see `occurrenceOn`).
+ */
 export function seriesOccurrence(
   event: CalendarEvent,
   dateKey: string,
@@ -177,8 +183,122 @@ export function seriesOccurrence(
     key: occurrenceKey(event.id, dateKey),
     event,
     date: dateKey,
+    seriesDate: dateKey,
     ...occurrenceTimes(event, dateKey, timeZone),
   };
+}
+
+/** The exception of a series on `dateKey`, if any (REV-07, Phase 9 B10). */
+export function exceptionOn(event: CalendarEvent, dateKey: string): EventException | undefined {
+  return event.exceptions?.[dateKey];
+}
+
+export function isCancelled(exception: EventException | undefined): boolean {
+  return exception !== undefined && "cancelled" in exception;
+}
+
+/**
+ * The occurrence of a series on schedule date `dateKey` with its exception applied (Phase 9
+ * B11): `null` when cancelled; when changed, the override's times and a derived event (the
+ * series with the overridden fields; id, rule and stored times stay), `date` its new first
+ * day, `key` still the schedule date, so links stay stable.
+ */
+export function occurrenceOn(
+  event: CalendarEvent,
+  dateKey: string,
+  timeZone: string,
+): EventOccurrence | null {
+  const exception = exceptionOn(event, dateKey);
+  if (exception === undefined) return seriesOccurrence(event, dateKey, timeZone);
+  if ("cancelled" in exception) return null;
+  const { start, end, ...fields } = exception;
+  const changed: CalendarEvent = { ...event, ...fields };
+  return {
+    key: occurrenceKey(event.id, dateKey),
+    event: changed,
+    date: occurrenceDays({ event: changed, start, end }, timeZone).startKey,
+    seriesDate: dateKey,
+    start,
+    end,
+    changed: true,
+  };
+}
+
+/** The occurrences behind schedule dates, without cancelled ones (Phase 9 B11). */
+function materialize(
+  event: CalendarEvent,
+  dates: readonly string[],
+  timeZone: string,
+): EventOccurrence[] {
+  const result: EventOccurrence[] = [];
+  for (const date of dates) {
+    const occurrence = occurrenceOn(event, date, timeZone);
+    if (occurrence) result.push(occurrence);
+  }
+  return result;
+}
+
+/** Changed occurrences of a series, wherever they were moved to (Phase 9 B11). */
+function changedOccurrences(event: CalendarEvent, timeZone: string): EventOccurrence[] {
+  return materialize(
+    event,
+    Object.keys(event.exceptions ?? {}).filter((key) => !isCancelled(exceptionOn(event, key))),
+    timeZone,
+  );
+}
+
+/**
+ * Schedule dates plus the changed occurrences, each once, with exceptions applied: a moved
+ * occurrence appears at its new time, whether or not its schedule date is in `dates`.
+ */
+function withExceptions(
+  event: CalendarEvent,
+  dates: readonly string[],
+  timeZone: string,
+): EventOccurrence[] {
+  if (!event.exceptions) return dates.map((date) => seriesOccurrence(event, date, timeZone));
+  const plain = dates.filter((date) => exceptionOn(event, date) === undefined);
+  return [
+    ...plain.map((date) => seriesOccurrence(event, date, timeZone)),
+    ...changedOccurrences(event, timeZone),
+  ];
+}
+
+/**
+ * The override of one occurrence (Phase 9 B10) from what the sheet produced: its times, plus
+ * the fields that differ from the series (so a later series edit still reaches the others).
+ * A description can't be removed for one occurrence: an empty one keeps the series'.
+ */
+export function overrideFor(
+  series: CalendarEvent,
+  input: Pick<
+    CalendarEvent,
+    "title" | "description" | "category" | "participants" | "start" | "end"
+  >,
+): EventOverride {
+  const override: EventOverride = { start: input.start, end: input.end };
+  if (input.title !== series.title) override.title = input.title;
+  if (input.description && input.description !== series.description) {
+    override.description = input.description;
+  }
+  if (input.category !== series.category) override.category = input.category;
+  if (!sameParticipantList(input.participants, series.participants)) {
+    override.participants = input.participants;
+  }
+  return override;
+}
+
+function sameParticipantList(a: EventParticipants, b: EventParticipants): boolean {
+  if (a === "household" || b === "household") return a === b;
+  return a.length === b.length && a.every((uid) => b.includes(uid));
+}
+
+/**
+ * Whether a series edit resets the exceptions (Phase 9 B12, D95): a new rule (or none), start
+ * or times move the schedule, so the dates the exceptions are keyed by may be gone.
+ */
+export function clearsExceptions(changes: EventChanges): boolean {
+  return "recurrence" in changes || "start" in changes || "end" in changes || "allDay" in changes;
 }
 
 /**
@@ -216,8 +336,8 @@ export function occurrencesInRange(
     if (dates.length === MAX_OCCURRENCES && import.meta.env?.DEV) {
       console.warn(`Event ${event.id}: expansion capped at ${MAX_OCCURRENCES} occurrences`);
     }
-    for (const date of dates) {
-      const occurrence = seriesOccurrence(event, date, timeZone);
+    // Cancelled dates drop out; changed ones appear at their new time (Phase 9 B11).
+    for (const occurrence of withExceptions(event, dates, timeZone)) {
       if (touches(occurrence)) result.push(occurrence);
     }
   }
@@ -226,7 +346,9 @@ export function occurrencesInRange(
 
 /**
  * First and last occurrence of a series (D63; `last` `null` = never ends), `null` for a
- * one-off event or a series without occurrences.
+ * one-off event or a series without occurrences. «Endete am …» is the last occurrence that
+ * takes place (Phase 9 B11): a cancelled last date doesn't count, a moved one counts on its
+ * new day.
  */
 export function seriesBounds(
   event: CalendarEvent,
@@ -234,10 +356,22 @@ export function seriesBounds(
   weekStartsOn: WeekStart,
 ): { first: string; last: string | null } | null {
   if (!event.recurrence) return null;
-  return seriesRange(event.recurrence, eventStartKey(event, timeZone), weekStartsOn);
+  const anchor = eventStartKey(event, timeZone);
+  const range = seriesRange(event.recurrence, anchor, weekStartsOn);
+  if (!range || range.last === null || !event.exceptions) return range;
+  const dates = occurrenceDates(event.recurrence, anchor, anchor, range.last, weekStartsOn);
+  const taking = withExceptions(event, dates, timeZone).map((occurrence) => occurrence.date);
+  const last = taking.reduce<string | null>((max, date) => (max && max > date ? max : date), null);
+  return { first: range.first, last: last ?? range.last };
 }
 
-/** «Nächste Termine» (D64): up to `count` occurrences of a series after `afterKey`. */
+/** Occurrences sorted by start. */
+const byStart = (a: EventOccurrence, b: EventOccurrence) => a.start.getTime() - b.start.getTime();
+
+/**
+ * «Nächste Termine» (D64): up to `count` occurrences of a series after `afterKey`, without
+ * cancelled ones and with changed ones at their new time (Phase 9 B11).
+ */
 export function nextOccurrences(
   event: CalendarEvent,
   afterKey: string,
@@ -246,14 +380,20 @@ export function nextOccurrences(
   weekStartsOn: WeekStart,
 ): EventOccurrence[] {
   if (!event.recurrence) return [];
-  return occurrenceDates(
+  // Enough schedule dates to still have `count` after dropping every exception.
+  const extra = Object.keys(event.exceptions ?? {}).length;
+  const dates = occurrenceDates(
     event.recurrence,
     eventStartKey(event, timeZone),
     addDaysToKey(afterKey, 1),
     FAR_FUTURE,
     weekStartsOn,
-    count,
-  ).map((date) => seriesOccurrence(event, date, timeZone));
+    count + extra,
+  );
+  return withExceptions(event, dates, timeZone)
+    .filter((occurrence) => occurrence.date > afterKey)
+    .sort(byStart)
+    .slice(0, count);
 }
 
 function shareParticipants(a: EventParticipants, b: EventParticipants): boolean {
@@ -301,11 +441,14 @@ export function resolveOccurrenceParam(
   const rule = event.recurrence;
   const anchor = eventStartKey(event, timeZone);
   if (isDateKey(date) && occurrenceDates(rule, anchor, date, date, weekStartsOn, 1).length > 0) {
-    return seriesOccurrence(event, date, timeZone);
+    // A cancelled date falls back like a date the schedule doesn't have (Phase 9 B11).
+    const occurrence = occurrenceOn(event, date, timeZone);
+    if (occurrence) return occurrence;
   }
-  const next = occurrenceDates(rule, anchor, todayKey, FAR_FUTURE, weekStartsOn, 1)[0];
-  const fallback = next ?? seriesRange(rule, anchor, weekStartsOn)?.last ?? anchor;
-  return seriesOccurrence(event, fallback, timeZone);
+  const next = nextOccurrences(event, addDaysToKey(todayKey, -1), 1, timeZone, weekStartsOn)[0];
+  if (next) return next;
+  const last = seriesRange(rule, anchor, weekStartsOn)?.last ?? anchor;
+  return occurrenceOn(event, last, timeZone) ?? seriesOccurrence(event, last, timeZone);
 }
 
 /** All-day and at least two days long: drawn as a bar (D54) with «Tag n von m». */
@@ -500,10 +643,10 @@ export function visibleParticipants(
   members: readonly Member[],
 ): { everyone: boolean; members: Member[] } {
   if (participants === "household") return { everyone: true, members: [...members] };
-  return {
-    everyone: false,
-    members: members.filter((member) => participants.includes(member.uid)),
-  };
+  const current = members.filter((member) => participants.includes(member.uid));
+  // Nobody of the list is left (Phase 9 B19): «Alle», as normalizeParticipants would save.
+  if (current.length === 0) return { everyone: true, members: [...members] };
+  return { everyone: false, members: current };
 }
 
 /**

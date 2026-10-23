@@ -1,8 +1,12 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fakeStore, makeEvent, makeItem, makeMember, makeTask } from "../../tests/householdFakes";
 import { HouseholdProvider } from "./HouseholdProvider";
+import { clearHouseholdEnded, isHouseholdEnded } from "./householdEnded";
 import { useHousehold } from "./useHousehold";
+
+const users = vi.hoisted(() => ({ clearStaleHousehold: vi.fn() }));
+vi.mock("../../services/userService", () => users);
 
 vi.mock("../firebase", () => ({ auth: {}, db: {} }));
 vi.mock("../../services/householdService", () =>
@@ -157,9 +161,55 @@ describe("HouseholdProvider", () => {
   });
 
   it("reports listener errors", () => {
-    fakeStore.error = new Error("permission-denied");
+    fakeStore.error = new Error("unavailable");
     renderProvider("nevio");
-    expect(state()).toMatchObject({ loading: false, error: "permission-denied", name: null });
+    expect(state()).toMatchObject({ loading: false, error: "unavailable", name: null });
+  });
+
+  describe("self-heal (Phase 9 B6)", () => {
+    beforeEach(() => {
+      users.clearStaleHousehold.mockReset();
+      clearHouseholdEnded();
+    });
+
+    const denied = () => Object.assign(new Error("denied"), { code: "permission-denied" });
+
+    it("clears the stale household when access is denied and notes it for onboarding", async () => {
+      users.clearStaleHousehold.mockResolvedValue(true);
+      fakeStore.error = denied();
+      renderProvider("anna");
+      expect(state()).toMatchObject({ loading: true, error: null });
+      expect(users.clearStaleHousehold).toHaveBeenCalledTimes(1);
+      expect(users.clearStaleHousehold).toHaveBeenCalledWith("anna", "h1");
+      await waitFor(() => expect(isHouseholdEnded()).toBe(true));
+    });
+
+    it("does the same when the household no longer exists", async () => {
+      users.clearStaleHousehold.mockResolvedValue(true);
+      fakeStore.household = null;
+      renderProvider("anna");
+      expect(state()).toMatchObject({ loading: true, error: null });
+      await waitFor(() => expect(isHouseholdEnded()).toBe(true));
+    });
+
+    it("adds no notice after a leave or delete on this device", async () => {
+      users.clearStaleHousehold.mockResolvedValue(false);
+      fakeStore.household = null;
+      renderProvider("nevio");
+      await waitFor(() => expect(users.clearStaleHousehold).toHaveBeenCalled());
+      expect(isHouseholdEnded()).toBe(false);
+      expect(state()).toMatchObject({ loading: true, error: null });
+    });
+
+    it("shows the error state when the clear is rejected", async () => {
+      users.clearStaleHousehold.mockRejectedValue(new Error("still a member"));
+      fakeStore.error = denied();
+      renderProvider("anna");
+      await waitFor(() =>
+        expect(state()).toMatchObject({ loading: false, error: "still a member" }),
+      );
+      expect(isHouseholdEnded()).toBe(false);
+    });
   });
 
   it("unsubscribes on unmount", () => {

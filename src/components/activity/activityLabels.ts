@@ -20,7 +20,8 @@ import { shopCategories } from "../ui/categories";
  */
 
 /** The small icon on the avatar (`Activity.dc.html`; `taskCreated` is D77). */
-export type ActivityIconKind = "taskDone" | "taskCreated" | "assign" | "shop" | "event" | "member";
+export type ActivityIconKind =
+  "taskDone" | "taskCreated" | "assign" | "shop" | "event" | "member" | "memberLeft";
 
 export interface ActivityLine {
   /** Bold actor name, «Ehemaliges Mitglied» for someone who left (D82). */
@@ -116,6 +117,18 @@ export function activityLine(row: ActivityRow, ctx: LineContext): ActivityLine {
       return line(who, has, title, activityCopy.eventCreated, "event", "event");
     case "member_joined":
       return line(who, activityCopy.is, ctx.householdName, activityCopy.joined, "member", "member");
+    // Phase 9 D90. The leaver isn't a member any more, so their name is the snapshot.
+    case "member_left":
+      return line(
+        entry.targetTitle,
+        has,
+        activityCopy.theHousehold,
+        activityCopy.left,
+        "memberLeft",
+        "member",
+      );
+    case "member_removed":
+      return line(who, has, entry.targetTitle, activityCopy.removed, "memberLeft", "member");
   }
 }
 

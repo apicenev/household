@@ -7,6 +7,22 @@ export type EventCategory = "social" | "appointment" | "travel" | "home" | "remi
 export type EventParticipants = "household" | string[];
 
 /**
+ * One occurrence of a series changed on its own (REV-07, Phase 9 B10): new times, and the
+ * fields that differ from the series when it was saved. «Ganztägig» stays the series' own.
+ */
+export interface EventOverride {
+  start: Date;
+  end: Date;
+  title?: string;
+  description?: string;
+  category?: EventCategory;
+  participants?: EventParticipants;
+}
+
+/** An exception of a series: the occurrence is cancelled, or changed. */
+export type EventException = { cancelled: true } | EventOverride;
+
+/**
  * households/{hid}/events/{eventId} (CAL-01…08, Phase 6 B1). Named `CalendarEvent` so it
  * doesn't clash with the DOM `Event`.
  *
@@ -31,6 +47,11 @@ export interface CalendarEvent {
    * on the client (`occurrencesInRange`) and never stored.
    */
   recurrence?: RecurrenceRule;
+  /**
+   * Single occurrences cancelled or changed (REV-07, Phase 9 B10), keyed by the occurrence's
+   * date on the schedule («2026-10-10»). Series only.
+   */
+  exceptions?: Record<string, EventException>;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
@@ -73,9 +94,14 @@ export interface EventChanges {
  */
 export interface EventOccurrence {
   key: string;
+  /** The event; for a changed occurrence the series with its override applied (Phase 9). */
   event: CalendarEvent;
   /** First day of this occurrence (household zone; all-day: its key, Phase 6 B2). */
   date: string;
   start: Date;
   end: Date;
+  /** Series only: the occurrence's date on the schedule (= `date` unless it was moved). */
+  seriesDate?: string;
+  /** Changed on its own (REV-07, D94). */
+  changed?: boolean;
 }

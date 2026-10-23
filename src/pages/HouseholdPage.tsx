@@ -1,28 +1,40 @@
+import {
+  ArrowRightStartOnRectangleIcon,
+  ArrowsRightLeftIcon,
+  PencilSquareIcon,
+  UserMinusIcon,
+} from "@heroicons/react/24/outline";
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
+import { DangerZone } from "../components/household/DangerZone";
 import { HouseholdSettings } from "../components/household/HouseholdSettings";
 import { InviteCard } from "../components/household/InviteCard";
 import { MemberList } from "../components/household/MemberList";
 import { MyProfile } from "../components/household/MyProfile";
+import { useHouseholdLifecycle } from "../components/household/useHouseholdLifecycle";
+import type { MenuEntry } from "../components/ui/Menu";
 import { useToast } from "../components/ui/toastContext";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useAuth } from "../lib/auth/useAuth";
-import { areas, memberCountLabel } from "../lib/copy";
+import { areas, lifecycleCopy, memberCountLabel } from "../lib/copy";
 import { firestoreErrorMessage } from "../lib/firestoreErrors";
 import { formatNumericDate } from "../lib/format";
 import { useLoadedHousehold } from "../lib/household/useHousehold";
 import { regenerateInvite } from "../services/inviteService";
+import type { Member } from "../types";
 
 /**
- * /household «Haushalt» (`Household.dc.html`): Mitglieder, Einladen, Einstellungen, Mein
- * Profil. Phones: one column; desktop: household name as the title and two columns. No
- * Gefahrenzone and no member menu until Phase 9 (B2, B3).
+ * /household «Haushalt» (`Household.dc.html`): Mitglieder (with the «⋯» menu, Phase 9 D83),
+ * Einladen, Einstellungen, Mein Profil and the Gefahrenzone. Phones: one column; desktop:
+ * household name as the title and two columns.
  */
 export default function HouseholdPage() {
   const { household, members, isOwner, memberById } = useLoadedHousehold();
   const { user, profile } = useAuth();
   const toast = useToast();
   const location = useLocation();
+  const navigate = useNavigate();
+  const lifecycle = useHouseholdLifecycle();
   const [regenerating, setRegenerating] = useState(false);
   useDocumentTitle(areas.household);
 
@@ -35,6 +47,42 @@ export default function HouseholdPage() {
       document.getElementById("profil")?.scrollIntoView({ block: "start" });
     }
   }, [location.hash, location.key]);
+
+  /** D83: own row «Profil bearbeiten» / «Haushalt verlassen»; the owner on others' rows. */
+  function menuItems(member: Member): MenuEntry[] {
+    const blocked = !lifecycle.canAct;
+    if (member.uid === user?.uid) {
+      return [
+        {
+          label: lifecycleCopy.editProfile,
+          icon: PencilSquareIcon,
+          onSelect: () => navigate({ hash: "profil" }),
+        },
+        {
+          label: lifecycleCopy.leave,
+          icon: ArrowRightStartOnRectangleIcon,
+          disabled: blocked || lifecycle.leaveState !== "ok",
+          onSelect: lifecycle.openLeave,
+        },
+      ];
+    }
+    if (!isOwner) return [];
+    return [
+      {
+        label: lifecycleCopy.handOver,
+        icon: ArrowsRightLeftIcon,
+        disabled: blocked,
+        onSelect: () => lifecycle.openHandOver(member),
+      },
+      {
+        label: lifecycleCopy.remove,
+        icon: UserMinusIcon,
+        danger: true,
+        disabled: blocked,
+        onSelect: () => lifecycle.openRemove(member),
+      },
+    ];
+  }
 
   async function newCode() {
     if (!profile) return;
@@ -63,7 +111,12 @@ export default function HouseholdPage() {
 
       <div className="flex flex-col gap-6 lg:grid lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-start lg:gap-5">
         <div className="flex flex-col gap-6 lg:gap-5">
-          <MemberList members={members} myUid={user?.uid ?? ""} timeZone={household.timeZone} />
+          <MemberList
+            members={members}
+            myUid={user?.uid ?? ""}
+            timeZone={household.timeZone}
+            menuItems={menuItems}
+          />
           <InviteCard
             household={household}
             isOwner={isOwner}
@@ -82,8 +135,10 @@ export default function HouseholdPage() {
           {profile && (
             <MyProfile profile={profile} household={household} email={user?.email ?? ""} />
           )}
+          <DangerZone lifecycle={lifecycle} />
         </div>
       </div>
+      {lifecycle.dialogs}
     </div>
   );
 }

@@ -11,15 +11,20 @@ export interface ConfirmDialogProps {
   onClose: () => void;
   /** Runs the destructive action; a returned promise shows the loading state. */
   onConfirm: () => void | Promise<void>;
-  /** «„Bad putzen“ löschen?» — also the accessible name. */
+  /** ««Bad putzen» löschen?» — also the accessible name. */
   title: string;
   text?: ReactNode;
   /** Danger button label, e.g. «Löschen», «Haushalt löschen». */
-  confirmLabel: string;
+  confirmLabel: ReactNode;
   /** Shown while onConfirm runs, e.g. «Löscht…». */
   loadingLabel?: string;
   /** 24/outline icon in the danger-soft circle (default trash). */
   icon?: ComponentType<SVGProps<SVGSVGElement>>;
+  /**
+   * `danger` (default) for destructive actions; `brand` for a weighty but not destructive one
+   * (Phase 9 D85: «Haushalt übergeben»): brand-soft circle and a primary button.
+   */
+  tone?: "danger" | "brand";
   /** Typed confirmation: the danger button unlocks once this exact text is entered. */
   confirmText?: string;
   /** Extra content between text and buttons (e.g. «Nur diese / Ganze Serie»). */
@@ -40,6 +45,7 @@ export function ConfirmDialog({
   confirmLabel,
   loadingLabel = "Löscht…",
   icon: Icon = TrashIcon,
+  tone = "danger",
   confirmText,
   children,
 }: ConfirmDialogProps) {
@@ -75,7 +81,12 @@ export function ConfirmDialog({
       size="sm"
       bodyClassName="gap-4 pt-2 lg:p-6"
     >
-      <span className="flex size-11 items-center justify-center rounded-pill bg-danger-soft text-danger">
+      <span
+        className={cx(
+          "flex size-11 items-center justify-center rounded-pill",
+          tone === "danger" ? "bg-danger-soft text-danger" : "bg-brand-soft text-brand-strong",
+        )}
+      >
         <Icon aria-hidden="true" className="size-6" />
       </span>
       <div className="flex flex-col gap-1.5">
@@ -119,7 +130,7 @@ export function ConfirmDialog({
           {actions.cancel}
         </Button>
         <Button
-          variant="danger"
+          variant={tone === "danger" ? "danger" : "primary"}
           size="lg"
           onClick={() => void confirm()}
           disabled={locked}

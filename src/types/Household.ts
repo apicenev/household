@@ -22,6 +22,13 @@ export interface Household {
    * skipped. Missing until the owner sets it.
    */
   rotationOrder?: string[];
+  /**
+   * Demo household (Phase 9 C4, C5): set only with the Admin SDK. It can't be left, emptied,
+   * handed over, deleted or renamed, and its members can't change their names.
+   */
+  demo?: boolean;
+  /** Deletion in progress (Phase 9 B7): only the owner is left in memberIds. */
+  deleting?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

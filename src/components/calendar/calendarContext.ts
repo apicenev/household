@@ -1,5 +1,11 @@
 import { createContext, useContext } from "react";
-import type { CalendarEvent, EventChanges, NewEventInput } from "../../types";
+import type {
+  CalendarEvent,
+  EventChanges,
+  EventOccurrence,
+  EventOverride,
+  NewEventInput,
+} from "../../types";
 import type { EventFormFocus } from "./EventForm";
 import type { EventPrefill } from "./eventFormValues";
 
@@ -8,6 +14,10 @@ export interface CalendarActions {
   create: (input: NewEventInput) => string;
   update: (event: CalendarEvent, changes: EventChanges) => void;
   remove: (event: CalendarEvent) => void;
+  /** REV-07 (Phase 9): cancels the occurrence of the series `event` on schedule date `dateKey`. */
+  cancelOccurrence: (event: CalendarEvent, dateKey: string) => void;
+  /** REV-07 (Phase 9): changes that occurrence on its own. */
+  editOccurrence: (event: CalendarEvent, dateKey: string, override: EventOverride) => void;
 }
 
 export interface NewEventOptions {
@@ -26,10 +36,20 @@ export interface CalendarContextValue {
    */
   openEditEvent: (eventId: string, onDeleted?: () => void) => void;
   /**
-   * The delete confirmation (D53); `onDeleted` runs right before the delete is sent (e.g. to
-   * leave the Termin-Detail).
+   * «Bearbeiten» on an occurrence: a series first asks «Nur diesen Termin / Ganze Serie»
+   * (Phase 9 D92), a one-off event opens its sheet.
    */
-  confirmDelete: (event: CalendarEvent, onDeleted?: () => void) => void;
+  editOccurrence: (occurrence: EventOccurrence, onDeleted?: () => void) => void;
+  /**
+   * The delete confirmation (D53); `onDeleted` runs right before the delete is sent (e.g. to
+   * leave the Termin-Detail). With an occurrence of a series, it asks «Nur diesen Termin /
+   * Ganze Serie» (Phase 9 D92); without, a series is deleted as a whole (D62).
+   */
+  confirmDelete: (
+    event: CalendarEvent,
+    onDeleted?: () => void,
+    occurrence?: EventOccurrence,
+  ) => void;
   /** Whether this device deleted the event (so it doesn't count as «deleted elsewhere», D52). */
   deletedHere: (eventId: string) => boolean;
 }

@@ -1,5 +1,6 @@
 import { ArrowPathIcon } from "@heroicons/react/16/solid";
 import { useId, type ReactNode } from "react";
+import { calendarCopy } from "../../lib/copy";
 import { cx } from "../../lib/cx";
 import type { EventOccurrence, Member, WeekStart } from "../../types";
 import { CategoryLabel } from "../ui/CategoryLabel";
@@ -123,6 +124,9 @@ export function DesktopEventCard({
             <ArrowPathIcon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
             {ruleLine(occurrence, timeZone, members, weekStartsOn)}
           </span>
+          {occurrence.changed && (
+            <span className="text-body-sm text-ink-muted">{calendarCopy.single.changed}</span>
+          )}
           {event.description && (
             <p className="text-body-sm whitespace-pre-line text-ink-muted">{event.description}</p>
           )}

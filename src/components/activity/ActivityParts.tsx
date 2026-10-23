@@ -1,4 +1,5 @@
 import {
+  ArrowRightStartOnRectangleIcon,
   CalendarIcon,
   CheckCircleIcon,
   PlusCircleIcon,
@@ -34,6 +35,7 @@ const icons: Record<
   shop: { Icon: ShoppingBagIcon, color: "text-shop-groceries" },
   event: { Icon: CalendarIcon, color: "text-event-social" },
   member: { Icon: UserPlusIcon, color: "text-success" },
+  memberLeft: { Icon: ArrowRightStartOnRectangleIcon, color: "text-ink-muted" },
 };
 
 /** «Alle / Aufgaben / Einkauf / Kalender / Mitglieder» (ACT-08); phones scroll sideways. */

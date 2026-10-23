@@ -55,6 +55,29 @@ describe("activityLine (D77)", () => {
     ).toBe("Anna ist Musterstrasse 12 beigetreten");
   });
 
+  it("words leaving and removal with the stored name of the one who left (Phase 9 D90)", () => {
+    const left = single({
+      type: "member_left",
+      actorId: "marco",
+      targetType: "member",
+      targetId: "marco",
+      targetTitle: "Marco",
+    });
+    expect(sentence(left)).toBe("Marco hat den Haushalt verlassen");
+    expect(activityLine(left, ctx)).toMatchObject({ icon: "memberLeft", typeLabel: "Mitglied" });
+    expect(
+      sentence(
+        single({
+          type: "member_removed",
+          actorId: "nevio",
+          targetType: "member",
+          targetId: "marco",
+          targetTitle: "Marco",
+        }),
+      ),
+    ).toBe("Nevio hat Marco aus dem Haushalt entfernt");
+  });
+
   it("splits the sentence into the designed parts, with icon and type label", () => {
     expect(activityLine(single(), ctx)).toMatchObject({
       who: "Anna",

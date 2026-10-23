@@ -3,6 +3,7 @@ import type { RecurrenceContext } from "../domain/tasks";
 import type {
   CalendarEvent,
   EventChanges,
+  EventOverride,
   Household,
   ItemStat,
   Member,
@@ -298,6 +299,10 @@ export const householdServiceMock = {
   },
   createHousehold: vi.fn<(profile: UserProfile, name: string) => Promise<string>>(),
   updateHouseholdSettings: vi.fn(),
+  leaveHousehold: vi.fn(),
+  removeMember: vi.fn(),
+  handOverHousehold: vi.fn(),
+  deleteHousehold: vi.fn(),
 };
 
 export const memberServiceMock = {
@@ -427,8 +432,21 @@ export const eventServiceMock = {
         actorId: string,
       ) => { id: string; committed: Promise<void> }
     >(),
-  updateEvent: vi.fn<(hid: string, eventId: string, changes: EventChanges) => Promise<void>>(),
+  updateEvent:
+    vi.fn<
+      (
+        hid: string,
+        eventId: string,
+        changes: EventChanges,
+        options?: { clearExceptions?: boolean },
+      ) => Promise<void>
+    >(),
   deleteEvent: vi.fn<(hid: string, eventId: string) => Promise<void>>(),
+  cancelOccurrence: vi.fn<(hid: string, eventId: string, dateKey: string) => Promise<void>>(),
+  editOccurrence:
+    vi.fn<
+      (hid: string, eventId: string, dateKey: string, override: EventOverride) => Promise<void>
+    >(),
 };
 
 /** An empty activity feed (Phase 8), for tests that only pass through /activity. */

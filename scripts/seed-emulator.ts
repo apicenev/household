@@ -15,6 +15,11 @@
  * With `--with-anna` (Phase 4, implies `--household`) Anna joins «Musterstrasse 12» like
  * joinHousehold would, and «Bad putzen» rotates Nevio → Anna.
  *
+ * With `--demo` (Phase 9 §9.9) it also writes the demo household with its two accounts
+ * (demo1@example.com, demo2@example.com), freshly on every run, as `npm run demo:setup` does
+ * in the real project. `--now=2026-10-23T07:30:00Z` fixes its moment (E2E, screenshots);
+ * `--extras` adds two tasks due today, for screenshots only.
+ *
  * Usage: npm run emulators (in another terminal), then `npm run seed`,
  * `npm run seed -- --household` or `npm run seed -- --with-anna`.
  * Idempotent: existing users and documents are left as they are; an expired code is replaced.
@@ -29,6 +34,7 @@ import { generateInviteCode, inviteExpiresAt, isInviteExpired } from "../src/dom
 import { avatarColorFor, initialsFor } from "../src/domain/member";
 import { statKey } from "../src/domain/shopping";
 import { todayKey } from "../src/domain/tasks";
+import { deleteDemoContent, demoState, findDemoUsers, writeDemo } from "./demo/demoWriter";
 
 const PROJECT_ID = "demo-household";
 const AUTH_HOST = "127.0.0.1:9099";
@@ -726,6 +732,42 @@ async function seedActivity(
   console.log(`+ ${entries.length} activity entries`);
 }
 
+const demoAccounts = [
+  { email: "demo1@example.com", displayName: "Demo User 1" },
+  { email: "demo2@example.com", displayName: "Demo User 2" },
+];
+
+/** The demo household (Phase 9 `--demo`), rebuilt on every run. */
+async function seedDemo(app: ReturnType<typeof initializeApp>) {
+  const auth = getAuth(app);
+  for (const account of demoAccounts) {
+    try {
+      await auth.getUserByEmail(account.email);
+    } catch {
+      await auth.createUser({ ...account, password: PASSWORD });
+      console.log(`+ ${account.email} created`);
+    }
+  }
+  const db = getFirestore(app);
+  const users = await findDemoUsers(
+    auth,
+    demoAccounts.map((account) => account.email),
+  );
+  const state = await demoState(db, users);
+  if (state.kind === "refused") throw new Error(state.reason);
+  if (state.kind === "existing") {
+    await deleteDemoContent(db, state.householdId, state.inviteCode, false);
+  }
+  const nowArg = process.argv.find((arg) => arg.startsWith("--now="));
+  const docs = await writeDemo(db, {
+    users: [users[0], users[1]],
+    householdId: state.kind === "existing" ? state.householdId : undefined,
+    now: nowArg ? new Date(nowArg.slice("--now=".length)) : undefined,
+    dueToday: process.argv.includes("--extras"),
+  });
+  console.log(`+ demo household with ${docs.length} documents (demo1 / demo2@example.com)`);
+}
+
 async function main() {
   assertEmulatorOnly();
   if (!(await emulatorsRunning())) {
@@ -776,6 +818,8 @@ async function main() {
           : `\nLog in as ${accounts[1].email} in a second browser profile and join with it.`),
     );
   }
+
+  if (process.argv.includes("--demo")) await seedDemo(app);
 
   console.log(`\nDone. Password for all accounts: ${PASSWORD}`);
 }
